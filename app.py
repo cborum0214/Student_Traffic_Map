@@ -12,132 +12,140 @@ UPLOAD_FOLDER = os.path.join("static", "floorplans")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
 
-# --------- Map persistence setup ---------
+# --------- Maps persistence setup ---------
 DATA_DIR = "data"
 os.makedirs(DATA_DIR, exist_ok=True)
-DATA_FILE = os.path.join(DATA_DIR, "map.json")
+DATA_FILE = os.path.join(DATA_DIR, "maps.json")
 
-# --------- In-memory data ---------
-# Spaces: points (classrooms, stairwells, intersections, etc.)
-#   { "id", "name", "type", "x", "y" }  (x,y normalized 0–1)
-SPACES = []
-NEXT_SPACE_ID = 1
-
-# Hallways: segments between two spaces
-#   { "id", "name",
-#     "x1","y1","x2","y2",
-#     "from_space_id","to_space_id" }
-HALLWAYS = []
-NEXT_HALLWAY_ID = 1
-
-# Schedule data (from CSV)
-# PERIOD_NAMES: list of strings like ["P1", "P2", "P3", ...]
-PERIOD_NAMES = []
-# STUDENT_SCHEDULES: list of dicts
-#   { "student_id", "student_name", "space_ids": [space_id or None, ...] }
-STUDENT_SCHEDULES = []
+# MAPS: list of map dicts
+# Each map:
+#   {
+#     "id": int,
+#     "name": str,
+#     "image_filename": str,
+#     "spaces": [ ... ],
+#     "hallways": [ ... ],
+#     "next_space_id": int,
+#     "next_hallway_id": int,
+#     "period_names": [ ... ],
+#     "student_schedules": [ ... ]
+#   }
+MAPS = []
+NEXT_MAP_ID = 1
 
 
 # --------- Persistence helpers ---------
 
-def save_map_data():
-    """
-    Save spaces, hallways, and ID counters to data/map.json.
-    """
+def ensure_map_defaults(m):
+    """Make sure a map dict has all required keys."""
+    m.setdefault("spaces", [])
+    m.setdefault("hallways", [])
+    m.setdefault("next_space_id", (max((s.get("id", 0) for s in m["spaces"]), default=0) + 1))
+    m.setdefault("next_hallway_id", (max((h.get("id", 0) for h in m["hallways"]), default=0) + 1))
+    m.setdefault("period_names", [])
+    m.setdefault("student_schedules", [])
+
+
+def save_all_data():
+    """Save all maps to DATA_FILE."""
     data = {
-        "spaces": SPACES,
-        "hallways": HALLWAYS,
-        "next_space_id": NEXT_SPACE_ID,
-        "next_hallway_id": NEXT_HALLWAY_ID,
+        "next_map_id": NEXT_MAP_ID,
+        "maps": MAPS,
     }
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        print(f"[MAP] Saved map data to {DATA_FILE}")
+        print(f"[MAPS] Saved maps data to {DATA_FILE}")
     except Exception as e:
-        print("[MAP] Error saving map data:", e)
+        print("[MAPS] Error saving maps data:", e)
 
 
-def load_map_data():
-    """
-    Load spaces, hallways, and ID counters from data/map.json, if present.
-    """
-    global SPACES, HALLWAYS, NEXT_SPACE_ID, NEXT_HALLWAY_ID
+def load_all_data():
+    """Load all maps from DATA_FILE, if present."""
+    global MAPS, NEXT_MAP_ID
 
     if not os.path.exists(DATA_FILE):
-        print(f"[MAP] No existing {DATA_FILE}, starting with empty map.")
+        print(f"[MAPS] No existing {DATA_FILE}, starting with empty maps list.")
         return
 
     try:
         with open(DATA_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
 
-        SPACES[:] = data.get("spaces", [])
-        HALLWAYS[:] = data.get("hallways", [])
+        MAPS = data.get("maps", [])
+        NEXT_MAP_ID = data.get("next_map_id", (max((m.get("id", 0) for m in MAPS), default=0) + 1))
 
-        # If counters missing, infer from max id
-        NEXT_SPACE_ID = data.get(
-            "next_space_id",
-            (max((s["id"] for s in SPACES), default=0) + 1)
-        )
-        NEXT_HALLWAY_ID = data.get(
-            "next_hallway_id",
-            (max((h["id"] for h in HALLWAYS), default=0) + 1)
-        )
+        for m in MAPS:
+            ensure_map_defaults(m)
 
-        print(
-            f"[MAP] Loaded {len(SPACES)} spaces and {len(HALLWAYS)} hallways "
-            f"(next IDs: space={NEXT_SPACE_ID}, hallway={NEXT_HALLWAY_ID})"
-        )
+        print(f"[MAPS] Loaded {len(MAPS)} map(s). NEXT_MAP_ID={NEXT_MAP_ID}")
     except Exception as e:
-        print("[MAP] Error loading map data:", e)
+        print("[MAPS] Error loading maps data:", e)
 
 
-# Load map data once when the module is imported
-load_map_data()
+def get_map(map_id: int):
+    """Return a map dict by id, or None."""
+    for m in MAPS:
+        if m.get("id") == map_id:
+            ensure_map_defaults(m)
+            return m
+    return None
 
 
-# --------- Helpers for spaces / hallways ---------
+def serialize_map_for_client(m):
+    """Return a safe subset of map info for the frontend."""
+    return {
+        "id": m["id"],
+        "name": m.get("name", f"Map {m['id']}"),
+        "image_url": url_for("static", filename=f"floorplans/{m['image_filename']}"),
+    }
 
-def get_space_by_id(space_id):
-    for s in SPACES:
+
+# Load maps at import time
+load_all_data()
+
+
+# --------- Helpers for spaces / hallways (per map) ---------
+
+def get_space_by_id(map_obj, space_id):
+    for s in map_obj["spaces"]:
         if s["id"] == space_id:
             return s
     return None
 
 
-def get_space_by_name(name):
-    for s in SPACES:
+def get_space_by_name(map_obj, name):
+    for s in map_obj["spaces"]:
         if s["name"] == name:
             return s
     return None
 
 
-def find_or_create_space_at(x, y, threshold=0.03):
+def find_or_create_space_at(map_obj, x, y, threshold=0.03):
     """
-    Find the nearest existing space to (x,y) in normalized coords.
+    For a given map, find the nearest existing space to (x,y) in normalized coords.
     If none exists within 'threshold' distance, create an Intersection.
     Returns the space dict.
     """
-    global NEXT_SPACE_ID, SPACES
+    spaces = map_obj["spaces"]
 
-    if not SPACES:
+    if not spaces:
         space = {
-            "id": NEXT_SPACE_ID,
-            "name": f"Node {NEXT_SPACE_ID}",
+            "id": map_obj["next_space_id"],
+            "name": f"Node {map_obj['next_space_id']}",
             "type": "Intersection",
             "x": float(x),
             "y": float(y),
         }
-        NEXT_SPACE_ID += 1
-        SPACES.append(space)
-        save_map_data()
-        print("Auto-created intersection space:", space)
+        map_obj["next_space_id"] += 1
+        spaces.append(space)
+        save_all_data()
+        print("[MAP] Auto-created intersection space:", space)
         return space
 
     best_space = None
     best_dist_sq = None
-    for s in SPACES:
+    for s in spaces:
         dx = s["x"] - x
         dy = s["y"] - y
         d_sq = dx * dx + dy * dy
@@ -147,35 +155,38 @@ def find_or_create_space_at(x, y, threshold=0.03):
 
     if best_dist_sq is None or math.sqrt(best_dist_sq) > threshold:
         space = {
-            "id": NEXT_SPACE_ID,
-            "name": f"Node {NEXT_SPACE_ID}",
+            "id": map_obj["next_space_id"],
+            "name": f"Node {map_obj['next_space_id']}",
             "type": "Intersection",
             "x": float(x),
             "y": float(y),
         }
-        NEXT_SPACE_ID += 1
-        SPACES.append(space)
-        save_map_data()
-        print("Auto-created intersection space:", space)
+        map_obj["next_space_id"] += 1
+        spaces.append(space)
+        save_all_data()
+        print("[MAP] Auto-created intersection space:", space)
         return space
 
-    print("Snapped point to existing space:", best_space)
+    print("[MAP] Snapped point to existing space:", best_space)
     return best_space
 
 
-def build_graph():
+def build_graph(map_obj):
     """
-    Build an adjacency list graph from SPACES and HALLWAYS.
+    Build an adjacency list graph from a map's SPACES and HALLWAYS.
 
     graph[space_id] = list of (neighbor_space_id, distance, hallway_id)
     """
+    spaces = map_obj["spaces"]
+    hallways = map_obj["hallways"]
+
     graph = {}
-    for s in SPACES:
+    for s in spaces:
         graph[s["id"]] = []
 
-    for h in HALLWAYS:
-        s1 = get_space_by_id(h.get("from_space_id"))
-        s2 = get_space_by_id(h.get("to_space_id"))
+    for h in hallways:
+        s1 = get_space_by_id(map_obj, h.get("from_space_id"))
+        s2 = get_space_by_id(map_obj, h.get("to_space_id"))
         if not s1 or not s2:
             continue
 
@@ -189,12 +200,12 @@ def build_graph():
     return graph
 
 
-def dijkstra_shortest_path(start_id, end_id):
+def dijkstra_shortest_path(map_obj, start_id, end_id):
     """
-    Dijkstra's algorithm to find shortest path between two spaces.
+    Dijkstra's algorithm to find shortest path between two spaces in a map.
     Returns (space_path, hallway_path) or (None, None) if unreachable.
     """
-    graph = build_graph()
+    graph = build_graph(map_obj)
     if start_id not in graph or end_id not in graph:
         return None, None
 
@@ -232,7 +243,7 @@ def dijkstra_shortest_path(start_id, end_id):
         current = prev[current]
     space_path.reverse()
 
-    # Derive hallway_ids between consecutive spaces
+    # Hallways between consecutive spaces
     for i in range(1, len(space_path)):
         sid = space_path[i]
         hallway_id = prev_edge[sid]
@@ -242,15 +253,29 @@ def dijkstra_shortest_path(start_id, end_id):
     return space_path, hallway_path
 
 
-# --------- Flask routes ---------
+# --------- Flask routes: pages & maps ---------
 
 @app.route("/")
 def index():
     return render_template("index.html")
 
 
+@app.route("/maps", methods=["GET"])
+def list_maps():
+    """
+    Return a list of maps so the frontend can show a picklist.
+    """
+    maps_for_client = [serialize_map_for_client(m) for m in MAPS]
+    return jsonify({"status": "ok", "maps": maps_for_client})
+
+
 @app.route("/upload_floorplan", methods=["POST"])
 def upload_floorplan():
+    """
+    Upload a floorplan image and create a new map entry.
+    """
+    global NEXT_MAP_ID
+
     if "floorplan" not in request.files:
         return jsonify({"status": "error", "message": "No file part"}), 400
 
@@ -258,45 +283,51 @@ def upload_floorplan():
     if file.filename == "":
         return jsonify({"status": "error", "message": "No selected file"}), 400
 
+    # Save image
     filepath = os.path.join(app.config["UPLOAD_FOLDER"], file.filename)
     file.save(filepath)
 
-    image_url = url_for("static", filename=f"floorplans/{file.filename}")
-    print("Saved floorplan to:", filepath)
-    print("Image URL is:", image_url)
-    return jsonify({"status": "ok", "url": image_url})
+    # Create new map
+    new_map = {
+        "id": NEXT_MAP_ID,
+        "name": file.filename,
+        "image_filename": file.filename,
+        "spaces": [],
+        "hallways": [],
+        "next_space_id": 1,
+        "next_hallway_id": 1,
+        "period_names": [],
+        "student_schedules": [],
+    }
+    NEXT_MAP_ID += 1
+    MAPS.append(new_map)
+    save_all_data()
 
-
-@app.route("/floorplans", methods=["GET"])
-def list_floorplans():
-    """
-    List all floorplan images already uploaded in static/floorplans
-    so the frontend can show them in a picklist.
-    """
-    floorplans = []
-    for fname in os.listdir(app.config["UPLOAD_FOLDER"]):
-        lower = fname.lower()
-        if lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")):
-            url = url_for("static", filename=f"floorplans/{fname}")
-            floorplans.append({
-                "filename": fname,
-                "url": url,
-            })
+    print("[MAPS] Created new map:", new_map)
 
     return jsonify({
         "status": "ok",
-        "floorplans": sorted(floorplans, key=lambda f: f["filename"])
+        "map": serialize_map_for_client(new_map)
     })
 
+
+# --------- Schedule upload / info (per map) ---------
 
 @app.route("/upload_schedule", methods=["POST"])
 def upload_schedule():
     """
-    Accept a CSV file with columns:
+    Accept a CSV file and apply it to a specific map.
+    CSV columns:
       student_id, student_name, P1, P2, P3, ...
-    Where P1..Pn are period names and their values are Space names (e.g. "Room 101").
+    Where P1..Pn are period names and their values are space names in that map.
     """
-    global PERIOD_NAMES, STUDENT_SCHEDULES
+    map_id = request.form.get("map_id", type=int)
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(map_id)
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
 
     if "schedule" not in request.files:
         return jsonify({"status": "error", "message": "No file part"}), 400
@@ -308,7 +339,6 @@ def upload_schedule():
     filepath = os.path.join(DATA_DIR, file.filename)
     file.save(filepath)
 
-    # Parse CSV
     loaded_period_names = []
     loaded_students = []
     unmatched_rooms = set()
@@ -318,20 +348,17 @@ def upload_schedule():
             reader = csv.DictReader(f)
             fieldnames = reader.fieldnames or []
 
-            # Expect first two columns: student_id, student_name
             if len(fieldnames) < 3:
                 return jsonify({
                     "status": "error",
                     "message": "CSV must have at least: student_id, student_name, and one period column (e.g. P1)."
                 }), 400
 
-            # All columns after first two are periods
-            loaded_period_names = fieldnames[2:]
+            loaded_period_names = fieldnames[2:]  # everything after first 2 columns
 
             for row in reader:
                 student_id = row.get("student_id", "").strip()
                 student_name = row.get("student_name", "").strip()
-
                 if not student_id and not student_name:
                     continue
 
@@ -342,7 +369,7 @@ def upload_schedule():
                         space_ids.append(None)
                         continue
 
-                    space = get_space_by_name(room_name)
+                    space = get_space_by_name(map_obj, room_name)
                     if space:
                         space_ids.append(space["id"])
                     else:
@@ -356,44 +383,73 @@ def upload_schedule():
                 })
 
     except Exception as e:
-        print("Error parsing schedule CSV:", e)
+        print("[SCHEDULE] Error parsing schedule CSV:", e)
         return jsonify({"status": "error", "message": f"Failed to parse CSV: {e}"}), 400
 
-    PERIOD_NAMES = loaded_period_names
-    STUDENT_SCHEDULES = loaded_students
+    map_obj["period_names"] = loaded_period_names
+    map_obj["student_schedules"] = loaded_students
+    save_all_data()
 
-    print(f"Loaded schedule with {len(STUDENT_SCHEDULES)} students and periods: {PERIOD_NAMES}")
+    print(
+        f"[SCHEDULE] Map {map_id}: loaded {len(loaded_students)} students with periods {loaded_period_names}"
+    )
 
     return jsonify({
         "status": "ok",
+        "map_id": map_id,
         "path": filepath,
-        "num_students": len(STUDENT_SCHEDULES),
-        "period_names": PERIOD_NAMES,
+        "num_students": len(loaded_students),
+        "period_names": loaded_period_names,
         "unmatched_rooms": sorted(list(unmatched_rooms))
     })
 
 
 @app.route("/schedule_info", methods=["GET"])
 def schedule_info():
+    map_id = request.args.get("map_id", type=int)
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(map_id)
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
+
     return jsonify({
         "status": "ok",
-        "period_names": PERIOD_NAMES,
-        "num_students": len(STUDENT_SCHEDULES)
+        "map_id": map_id,
+        "period_names": map_obj.get("period_names", []),
+        "num_students": len(map_obj.get("student_schedules", []))
     })
 
 
+# --------- Spaces (per map) ---------
+
 @app.route("/spaces", methods=["GET"])
 def get_spaces():
-    return jsonify({"spaces": SPACES})
+    map_id = request.args.get("map_id", type=int)
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(map_id)
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
+
+    return jsonify({"spaces": map_obj["spaces"]})
 
 
 @app.route("/spaces", methods=["POST"])
 def add_space():
-    global NEXT_SPACE_ID
-
     data = request.get_json()
     if not data:
         return jsonify({"status": "error", "message": "Missing JSON body"}), 400
+
+    map_id = data.get("map_id")
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(int(map_id))
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
 
     name = data.get("name")
     stype = data.get("type")
@@ -404,70 +460,97 @@ def add_space():
         return jsonify({"status": "error", "message": "Missing fields"}), 400
 
     space = {
-        "id": NEXT_SPACE_ID,
+        "id": map_obj["next_space_id"],
         "name": name,
         "type": stype,
         "x": float(x),
         "y": float(y),
     }
-    NEXT_SPACE_ID += 1
-    SPACES.append(space)
-    save_map_data()
+    map_obj["next_space_id"] += 1
+    map_obj["spaces"].append(space)
+    save_all_data()
 
-    print("New space:", space)
+    print(f"[MAP {map_id}] New space:", space)
     return jsonify({"status": "ok", "space": space})
 
 
 @app.route("/spaces/<int:space_id>", methods=["DELETE"])
 def delete_space(space_id):
     """
-    Delete a space (classroom, intersection, etc.)
+    Delete a space in a specific map.
     Also deletes any hallways connected to that space.
     """
-    global SPACES, HALLWAYS
+    map_id = request.args.get("map_id", type=int)
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
 
-    before_spaces = len(SPACES)
-    SPACES = [s for s in SPACES if s["id"] != space_id]
-    after_spaces = len(SPACES)
+    map_obj = get_map(map_id)
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
 
-    before_hallways = len(HALLWAYS)
-    HALLWAYS = [
-        h for h in HALLWAYS
+    spaces = map_obj["spaces"]
+    hallways = map_obj["hallways"]
+
+    before_spaces = len(spaces)
+    spaces[:] = [s for s in spaces if s["id"] != space_id]
+    after_spaces = len(spaces)
+
+    before_hallways = len(hallways)
+    hallways[:] = [
+        h for h in hallways
         if h.get("from_space_id") != space_id and h.get("to_space_id") != space_id
     ]
-    after_hallways = len(HALLWAYS)
+    after_hallways = len(hallways)
 
-    save_map_data()
+    save_all_data()
 
     print(
-        f"Deleted space {space_id}. Spaces: {before_spaces}->{after_spaces}, "
+        f"[MAP {map_id}] Deleted space {space_id}. "
+        f"Spaces: {before_spaces}->{after_spaces}, "
         f"Hallways: {before_hallways}->{after_hallways}"
     )
 
     return jsonify({
         "status": "ok",
+        "map_id": map_id,
         "deleted_space_id": space_id,
         "remaining_spaces": after_spaces,
         "remaining_hallways": after_hallways
     })
 
 
+# --------- Hallways (per map) ---------
+
 @app.route("/hallways", methods=["GET"])
 def get_hallways():
-    return jsonify({"hallways": HALLWAYS})
+    map_id = request.args.get("map_id", type=int)
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(map_id)
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
+
+    return jsonify({"hallways": map_obj["hallways"]})
 
 
 @app.route("/hallways", methods=["POST"])
 def add_hallway():
     """
-    Add a hallway segment between two points.
+    Add a hallway segment between two points in a specific map.
     Snap endpoints to nearest spaces or auto-create Intersections.
     """
-    global NEXT_HALLWAY_ID, HALLWAYS
-
     data = request.get_json()
     if not data:
         return jsonify({"status": "error", "message": "Missing JSON body"}), 400
+
+    map_id = data.get("map_id")
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(int(map_id))
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
 
     name = data.get("name")
     x1 = data.get("x1")
@@ -478,11 +561,11 @@ def add_hallway():
     if name is None or x1 is None or y1 is None or x2 is None or y2 is None:
         return jsonify({"status": "error", "message": "Missing fields"}), 400
 
-    s1 = find_or_create_space_at(float(x1), float(y1))
-    s2 = find_or_create_space_at(float(x2), float(y2))
+    s1 = find_or_create_space_at(map_obj, float(x1), float(y1))
+    s2 = find_or_create_space_at(map_obj, float(x2), float(y2))
 
     hallway = {
-        "id": NEXT_HALLWAY_ID,
+        "id": map_obj["next_hallway_id"],
         "name": name,
         "x1": s1["x"],
         "y1": s1["y"],
@@ -491,45 +574,68 @@ def add_hallway():
         "from_space_id": s1["id"],
         "to_space_id": s2["id"],
     }
-    NEXT_HALLWAY_ID += 1
-    HALLWAYS.append(hallway)
-    save_map_data()
+    map_obj["next_hallway_id"] += 1
+    map_obj["hallways"].append(hallway)
+    save_all_data()
 
-    print("New hallway:", hallway)
+    print(f"[MAP {map_id}] New hallway:", hallway)
     return jsonify({"status": "ok", "hallway": hallway})
 
 
 @app.route("/hallways/<int:hallway_id>", methods=["DELETE"])
 def delete_hallway(hallway_id):
     """
-    Delete a hallway segment by id.
+    Delete a hallway segment by id in a specific map.
     """
-    global HALLWAYS
+    map_id = request.args.get("map_id", type=int)
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
 
-    before = len(HALLWAYS)
-    HALLWAYS = [h for h in HALLWAYS if h["id"] != hallway_id]
-    after = len(HALLWAYS)
+    map_obj = get_map(map_id)
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
 
-    save_map_data()
+    hallways = map_obj["hallways"]
+    before = len(hallways)
+    hallways[:] = [h for h in hallways if h["id"] != hallway_id]
+    after = len(hallways)
 
-    print(f"Deleted hallway {hallway_id}. Hallways: {before}->{after}")
+    save_all_data()
+
+    print(f"[MAP {map_id}] Deleted hallway {hallway_id}. Hallways: {before}->{after}")
 
     return jsonify({
         "status": "ok",
+        "map_id": map_id,
         "deleted_hallway_id": hallway_id,
         "remaining_hallways": after
     })
 
 
+# --------- Route (per map) ---------
+
 @app.route("/route", methods=["POST"])
 def route():
     """
-    Compute shortest route between two spaces.
-    Expected JSON: { "from_space_id": 3, "to_space_id": 7 }
+    Compute shortest route between two spaces in a specific map.
+    Expected JSON:
+      {
+        "map_id": 1,
+        "from_space_id": 3,
+        "to_space_id": 7
+      }
     """
     data = request.get_json()
     if not data:
         return jsonify({"status": "error", "message": "Missing JSON body"}), 400
+
+    map_id = data.get("map_id")
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(int(map_id))
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
 
     try:
         start_id = int(data.get("from_space_id"))
@@ -537,7 +643,7 @@ def route():
     except (TypeError, ValueError):
         return jsonify({"status": "error", "message": "Invalid space ids"}), 400
 
-    if not get_space_by_id(start_id) or not get_space_by_id(end_id):
+    if not get_space_by_id(map_obj, start_id) or not get_space_by_id(map_obj, end_id):
         return jsonify({"status": "error", "message": "One or both spaces not found"}), 400
 
     if start_id == end_id:
@@ -548,7 +654,7 @@ def route():
             "message": "Start and end are the same space."
         })
 
-    space_path, hallway_path = dijkstra_shortest_path(start_id, end_id)
+    space_path, hallway_path = dijkstra_shortest_path(map_obj, start_id, end_id)
     if space_path is None:
         return jsonify({
             "status": "error",
@@ -563,22 +669,24 @@ def route():
     })
 
 
-# --------- Congestion simulation ---------
+# --------- Congestion simulation (per map) ---------
 
-def compute_congestion(from_index, to_index):
+def compute_congestion(map_obj, from_index, to_index):
     """
-    For each student, route from period[from_index] to period[to_index]
+    For each student in a map, route from period[from_index] to period[to_index]
     and count how many times each hallway is used.
     Returns a dict: hallway_id -> count
     """
     counts = {}
+    period_names = map_obj.get("period_names", [])
+    student_schedules = map_obj.get("student_schedules", [])
 
     if from_index < 0 or to_index < 0:
         return counts
-    if from_index >= len(PERIOD_NAMES) or to_index >= len(PERIOD_NAMES):
+    if from_index >= len(period_names) or to_index >= len(period_names):
         return counts
 
-    for student in STUDENT_SCHEDULES:
+    for student in student_schedules:
         space_ids = student["space_ids"]
         if from_index >= len(space_ids) or to_index >= len(space_ids):
             continue
@@ -591,7 +699,7 @@ def compute_congestion(from_index, to_index):
         if s_from == s_to:
             continue
 
-        space_path, hallway_path = dijkstra_shortest_path(s_from, s_to)
+        space_path, hallway_path = dijkstra_shortest_path(map_obj, s_from, s_to)
         if space_path is None or not hallway_path:
             continue
 
@@ -604,18 +712,34 @@ def compute_congestion(from_index, to_index):
 @app.route("/congestion", methods=["POST"])
 def congestion():
     """
-    Compute congestion between two period indices.
-    Expected JSON: { "from_period_index": 0, "to_period_index": 1 }
+    Compute congestion between two period indices in a specific map.
+    Expected JSON:
+      {
+        "map_id": 1,
+        "from_period_index": 0,
+        "to_period_index": 1
+      }
     """
-    if not PERIOD_NAMES or not STUDENT_SCHEDULES:
-        return jsonify({
-            "status": "error",
-            "message": "No schedule loaded yet."
-        }), 400
-
     data = request.get_json()
     if not data:
         return jsonify({"status": "error", "message": "Missing JSON body"}), 400
+
+    map_id = data.get("map_id")
+    if not map_id:
+        return jsonify({"status": "error", "message": "Missing map_id"}), 400
+
+    map_obj = get_map(int(map_id))
+    if not map_obj:
+        return jsonify({"status": "error", "message": "Map not found"}), 404
+
+    period_names = map_obj.get("period_names", [])
+    student_schedules = map_obj.get("student_schedules", [])
+
+    if not period_names or not student_schedules:
+        return jsonify({
+            "status": "error",
+            "message": "No schedule loaded for this map."
+        }), 400
 
     try:
         from_idx = int(data.get("from_period_index"))
@@ -623,18 +747,19 @@ def congestion():
     except (TypeError, ValueError):
         return jsonify({"status": "error", "message": "Invalid period indices"}), 400
 
-    if from_idx < 0 or to_idx < 0 or from_idx >= len(PERIOD_NAMES) or to_idx >= len(PERIOD_NAMES):
+    if from_idx < 0 or to_idx < 0 or from_idx >= len(period_names) or to_idx >= len(period_names):
         return jsonify({"status": "error", "message": "Period index out of range"}), 400
 
-    counts = compute_congestion(from_idx, to_idx)
+    counts = compute_congestion(map_obj, from_idx, to_idx)
     hallway_counts = [{"hallway_id": h_id, "count": c} for h_id, c in counts.items()]
-    total_trips = sum(c for c in counts.values())  # total hallway traversals
+    total_trips = sum(c for c in counts.values())
     max_count = max(counts.values()) if counts else 0
 
     return jsonify({
         "status": "ok",
-        "period_from": PERIOD_NAMES[from_idx],
-        "period_to": PERIOD_NAMES[to_idx],
+        "map_id": int(map_id),
+        "period_from": period_names[from_idx],
+        "period_to": period_names[to_idx],
         "hallway_counts": hallway_counts,
         "total_trips": total_trips,
         "max_count": max_count

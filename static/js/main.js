@@ -2,17 +2,14 @@ const statusDiv = document.getElementById("status");
 const canvas = document.getElementById("floorCanvas");
 const ctx = canvas.getContext("2d");
 
+// Map selection
+const mapSelect = document.getElementById("mapSelect");
+const loadMapBtn = document.getElementById("loadMapBtn");
+
 const uploadFloorplanBtn = document.getElementById("uploadFloorplanBtn");
 const uploadScheduleBtn = document.getElementById("uploadScheduleBtn");
 uploadFloorplanBtn.addEventListener("click", uploadFloorplan);
 uploadScheduleBtn.addEventListener("click", uploadSchedule);
-
-// New: existing floorplan picklist
-const floorplanSelect = document.getElementById("floorplanSelect");
-const loadFloorplanBtn = document.getElementById("loadFloorplanBtn");
-if (loadFloorplanBtn) {
-    loadFloorplanBtn.addEventListener("click", loadExistingFloorplan);
-}
 
 // Mode: "space" or "hallway"
 let mode = "space";
@@ -24,19 +21,25 @@ document.querySelectorAll('input[name="mode"]').forEach(function (radio) {
         );
         pendingHallwayStart = null;
         routeHallwayIds = [];
+        hallwayCongestion = {};
+
+        // When switching editing modes, show labels again
+        showLabels = true;
+        drawFloorplan();
     });
 });
 
-// Data
+// Data (per current map)
+let currentMapId = null;
+let maps = [];          // list of {id, name, image_url}
 let spaces = [];
 let hallways = [];
-
-// Route highlight
+let periodNames = [];
+let hallwayCongestion = {};   // hallway_id -> count
 let routeHallwayIds = [];
 
-// Congestion data: hallway_id -> count
-let hallwayCongestion = {};
-let periodNames = [];
+// 👇 New: whether to draw room labels on the canvas
+let showLabels = true;
 
 // DOM for lists
 const spacesListEl = document.getElementById("spacesList");
@@ -137,61 +140,85 @@ if (zoomOutBtn) {
 // Initialize zoom label
 updateZoomLabel();
 
-// ---------- Floorplan loading helpers ----------
+// ---------- Map list ----------
 
-async function loadFloorplanList() {
-    if (!floorplanSelect) return;
-
+async function loadMapList() {
     try {
-        const response = await fetch("/floorplans");
+        const response = await fetch("/maps");
         const result = await response.json();
-        console.log("Floorplan list:", result);
+        console.log("Maps list:", result);
 
         if (!response.ok || result.status !== "ok") {
-            setStatus(result.message || "Error loading floorplan list.", true);
+            setStatus(result.message || "Error loading map list.", true);
             return;
         }
 
-        const floorplans = result.floorplans || [];
-        floorplanSelect.innerHTML = "";
+        maps = result.maps || [];
+        mapSelect.innerHTML = "";
 
-        if (floorplans.length === 0) {
+        if (maps.length === 0) {
             const opt = document.createElement("option");
             opt.value = "";
-            opt.textContent = "No existing floorplans found";
-            floorplanSelect.appendChild(opt);
-            floorplanSelect.disabled = true;
-            if (loadFloorplanBtn) loadFloorplanBtn.disabled = true;
+            opt.textContent = "No maps yet – upload a floorplan";
+            mapSelect.appendChild(opt);
+            mapSelect.disabled = true;
+            if (loadMapBtn) loadMapBtn.disabled = true;
             return;
         }
 
-        floorplanSelect.disabled = false;
-        if (loadFloorplanBtn) loadFloorplanBtn.disabled = false;
+        mapSelect.disabled = false;
+        if (loadMapBtn) loadMapBtn.disabled = false;
 
-        floorplans.forEach(fp => {
+        maps.forEach(m => {
             const opt = document.createElement("option");
-            opt.value = fp.url;
-            opt.textContent = fp.filename;
-            floorplanSelect.appendChild(opt);
+            opt.value = String(m.id);
+            opt.textContent = m.name;
+            mapSelect.appendChild(opt);
         });
 
     } catch (err) {
-        console.error("Error loading floorplan list:", err);
-        setStatus("Could not load existing floorplans.", true);
+        console.error("Error loading maps:", err);
+        setStatus("Could not load maps list.", true);
     }
 }
 
-async function loadExistingFloorplan() {
-    if (!floorplanSelect) return;
-    const url = floorplanSelect.value;
-    if (!url) {
-        setStatus("Please select an existing floorplan.", true);
+async function loadSelectedMap() {
+    const val = mapSelect.value;
+    if (!val) {
+        setStatus("Please select a map.", true);
         return;
     }
-    await loadFloorplanImage(url);
+
+    const mapId = parseInt(val, 10);
+    if (isNaN(mapId)) {
+        setStatus("Invalid map selection.", true);
+        return;
+    }
+
+    const mapObj = maps.find(m => m.id === mapId);
+    if (!mapObj) {
+        setStatus("Selected map not found in list.", true);
+        return;
+    }
+
+    currentMapId = mapId;
+    // When loading a map, default to labels visible
+    showLabels = true;
+    await loadFloorplanImage(mapObj.image_url);
 }
 
+if (loadMapBtn) {
+    loadMapBtn.addEventListener("click", loadSelectedMap);
+}
+
+// ---------- Floorplan loading helpers ----------
+
 async function loadFloorplanImage(imageUrl) {
+    if (!currentMapId) {
+        setStatus("No map selected. Choose a map first.", true);
+        return;
+    }
+
     setStatus("Loading floorplan from " + imageUrl + "...");
 
     const img = new Image();
@@ -200,13 +227,16 @@ async function loadFloorplanImage(imageUrl) {
 
         await loadSpacesFromServer();
         await loadHallwaysFromServer();
-        await loadScheduleInfo(); // in case schedule already uploaded
+        await loadScheduleInfo(); // if schedule already uploaded for this map
 
         routeHallwayIds = [];
         hallwayCongestion = {};
         zoom = 1.0;
         if (zoomSlider) zoomSlider.value = "1";
         updateZoomLabel();
+
+        // When we freshly load a map image, show labels
+        showLabels = true;
 
         drawFloorplan();
         setStatus(
@@ -220,7 +250,7 @@ async function loadFloorplanImage(imageUrl) {
     img.src = imageUrl;
 }
 
-// ---------- Upload floorplan and draw it ----------
+// ---------- Upload floorplan and create a new map ----------
 
 async function uploadFloorplan() {
     const fileInput = document.getElementById("floorplanFile");
@@ -247,19 +277,25 @@ async function uploadFloorplan() {
             return;
         }
 
-        const imageUrl = result.url;
+        const newMap = result.map;
+        setStatus("Floorplan uploaded and new map created: " + newMap.name);
 
-        // Refresh floorplan list so the new upload appears in the picklist
-        await loadFloorplanList();
+        // Refresh map list
+        await loadMapList();
 
-        await loadFloorplanImage(imageUrl);
+        // Select and load the new map
+        currentMapId = newMap.id;
+        mapSelect.value = String(newMap.id);
+        showLabels = true;
+        await loadFloorplanImage(newMap.image_url);
     } catch (err) {
         console.error(err);
         setStatus("Unexpected error uploading floorplan.", true);
     }
 }
 
-// Draw floorplan + overlays
+// ---------- Draw floorplan + overlays ----------
+
 function drawFloorplan() {
     if (!currentImage) return;
 
@@ -272,10 +308,8 @@ function drawFloorplan() {
     const x = (canvas.width - drawWidth) / 2;
     const y = (canvas.height - drawHeight) / 2;
 
-    // imageMeta stores the "logical" rect before zoom
     imageMeta = { x: x, y: y, width: drawWidth, height: drawHeight, loaded: true };
 
-    // Apply zoom transform to everything we draw
     ctx.save();
     applyZoomTransform();
 
@@ -286,17 +320,17 @@ function drawFloorplan() {
 
     ctx.restore();
 
-    // UI stuff (lists, selectors) doesn't depend on zoom
     renderLists();
     updateRouteSelectors();
     updatePeriodSelectors();
 }
 
-// ---------- Load data from server ----------
+// ---------- Load data from server for current map ----------
 
 async function loadSpacesFromServer() {
+    if (!currentMapId) return;
     try {
-        const response = await fetch("/spaces");
+        const response = await fetch("/spaces?map_id=" + currentMapId);
         const result = await response.json();
         spaces = result.spaces || [];
         console.log("Loaded spaces:", spaces);
@@ -307,8 +341,9 @@ async function loadSpacesFromServer() {
 }
 
 async function loadHallwaysFromServer() {
+    if (!currentMapId) return;
     try {
-        const response = await fetch("/hallways");
+        const response = await fetch("/hallways?map_id=" + currentMapId);
         const result = await response.json();
         hallways = result.hallways || [];
         console.log("Loaded hallways:", hallways);
@@ -319,11 +354,12 @@ async function loadHallwaysFromServer() {
 }
 
 async function loadScheduleInfo() {
+    if (!currentMapId) return;
     try {
-        const response = await fetch("/schedule_info");
+        const response = await fetch("/schedule_info?map_id=" + currentMapId);
         const result = await response.json();
         if (!response.ok || result.status !== "ok") {
-            return; // no schedule yet
+            return; // no schedule yet for this map
         }
         periodNames = result.period_names || [];
         console.log("Schedule info:", result);
@@ -333,7 +369,7 @@ async function loadScheduleInfo() {
     }
 }
 
-// ---------- Drawing overlays (uses pre-zoom imageMeta, but called inside zoomed context) ----------
+// ---------- Drawing overlays ----------
 
 function drawSpacesOverlay() {
     if (!imageMeta.loaded) return;
@@ -350,7 +386,10 @@ function drawSpacesOverlay() {
         ctx.arc(sx, sy, r, 0, Math.PI * 2);
         ctx.fill();
 
-        ctx.fillText(space.name, sx + 8, sy - 8);
+        // Only show labels when flag is true
+        if (showLabels) {
+            ctx.fillText(space.name, sx + 8, sy - 8);
+        }
     });
 }
 
@@ -361,7 +400,7 @@ function drawHallwaysOverlay() {
         const x1 = imageMeta.x + h.x1 * imageMeta.width;
         const y1 = imageMeta.y + h.y1 * imageMeta.height;
         const x2 = imageMeta.x + h.x2 * imageMeta.width;
-        const y2 = imageMeta.y + h.x2 * imageMeta.height;
+        const y2 = imageMeta.y + h.y2 * imageMeta.height;
 
         const count = hallwayCongestion[h.id] || 0;
 
@@ -513,6 +552,8 @@ function updatePeriodSelectors() {
         opt1.textContent = label;
         congFromSelect.appendChild(opt1);
 
+        
+
         const opt2 = document.createElement("option");
         opt2.value = String(idx);
         opt2.textContent = label;
@@ -540,13 +581,18 @@ function updatePeriodSelectors() {
 // ---------- Delete actions ----------
 
 async function deleteSpace(spaceId) {
+    if (!currentMapId) {
+        setStatus("Select a map first.", true);
+        return;
+    }
+
     const ok = window.confirm(
         "Delete space " + spaceId + " and any connected hallways?"
     );
     if (!ok) return;
 
     try {
-        const response = await fetch("/spaces/" + spaceId, {
+        const response = await fetch("/spaces/" + spaceId + "?map_id=" + currentMapId, {
             method: "DELETE"
         });
         const result = await response.json();
@@ -561,6 +607,7 @@ async function deleteSpace(spaceId) {
         await loadHallwaysFromServer();
         routeHallwayIds = [];
         hallwayCongestion = {};
+        showLabels = true;
         drawFloorplan();
         setStatus("Space " + spaceId + " deleted.");
     } catch (err) {
@@ -570,11 +617,16 @@ async function deleteSpace(spaceId) {
 }
 
 async function deleteHallway(hallwayId) {
+    if (!currentMapId) {
+        setStatus("Select a map first.", true);
+        return;
+    }
+
     const ok = window.confirm("Delete hallway " + hallwayId + "?");
     if (!ok) return;
 
     try {
-        const response = await fetch("/hallways/" + hallwayId, {
+        const response = await fetch("/hallways/" + hallwayId + "?map_id=" + currentMapId, {
             method: "DELETE"
         });
         const result = await response.json();
@@ -588,6 +640,7 @@ async function deleteHallway(hallwayId) {
         await loadHallwaysFromServer();
         routeHallwayIds = [];
         hallwayCongestion = {};
+        showLabels = true;
         drawFloorplan();
         setStatus("Hallway " + hallwayId + " deleted.");
     } catch (err) {
@@ -599,8 +652,12 @@ async function deleteHallway(hallwayId) {
 // ---------- Canvas click handler (with zoom-aware coords) ----------
 
 canvas.addEventListener("click", async function (e) {
+    if (!currentMapId) {
+        setStatus("Select or upload a map first.", true);
+        return;
+    }
     if (!imageMeta.loaded) {
-        setStatus("Upload or load a floorplan first.", true);
+        setStatus("Load a floorplan first.", true);
         return;
     }
 
@@ -626,6 +683,9 @@ canvas.addEventListener("click", async function (e) {
     const relX = (unzoomX - imageMeta.x) / imageMeta.width;
     const relY = (unzoomY - imageMeta.y) / imageMeta.height;
 
+    // Editing again → show labels
+    showLabels = true;
+
     // Clear route & congestion highlight when editing
     routeHallwayIds = [];
     hallwayCongestion = {};
@@ -641,6 +701,11 @@ canvas.addEventListener("click", async function (e) {
 // ---------- Space click ----------
 
 async function handleSpaceClick(relX, relY) {
+    if (!currentMapId) {
+        setStatus("Select a map first.", true);
+        return;
+    }
+
     const name = window.prompt("Space name (e.g., Room 210):");
     if (!name) {
         setStatus("Space creation cancelled.");
@@ -653,7 +718,7 @@ async function handleSpaceClick(relX, relY) {
             "Classroom"
         ) || "Classroom";
 
-    const newSpace = { name: name, type: type, x: relX, y: relY };
+    const newSpace = { map_id: currentMapId, name: name, type: type, x: relX, y: relY };
 
     try {
         const response = await fetch("/spaces", {
@@ -678,9 +743,14 @@ async function handleSpaceClick(relX, relY) {
     }
 }
 
-// ---------- Hallway click (snap to spaces / intersections) ----------
+// ---------- Hallway click ----------
 
 async function handleHallwayClick(relX, relY) {
+    if (!currentMapId) {
+        setStatus("Select a map first.", true);
+        return;
+    }
+
     if (!pendingHallwayStart) {
         pendingHallwayStart = { x: relX, y: relY };
         setStatus("Hallway start set. Click a second point to finish the hallway.");
@@ -697,6 +767,7 @@ async function handleHallwayClick(relX, relY) {
     }
 
     const newHallway = {
+        map_id: currentMapId,
         name: name,
         x1: start.x,
         y1: start.y,
@@ -731,9 +802,13 @@ async function handleHallwayClick(relX, relY) {
     }
 }
 
-// ---------- Route request (manual test route) ----------
+// ---------- Route request ----------
 
 async function requestRoute() {
+    if (!currentMapId) {
+        setStatus("Select a map first.", true);
+        return;
+    }
     if (!routeFromSelect || !routeToSelect) {
         setStatus("Route controls not found.", true);
         return;
@@ -742,7 +817,7 @@ async function requestRoute() {
     const fromVal = routeFromSelect.value;
     const toVal = routeToSelect.value;
 
-       if (!fromVal || !toVal) {
+    if (!fromVal || !toVal) {
         setStatus("Please select both a start and end space.", true);
         return;
     }
@@ -757,16 +832,22 @@ async function requestRoute() {
 
     if (fromId === toId) {
         routeHallwayIds = [];
+        // Hide labels for route view of a trivial path too
+        showLabels = false;
         drawFloorplan();
         setStatus("Start and end are the same space.");
         return;
     }
+
+    // Hide labels while route is being shown
+    showLabels = false;
 
     try {
         const response = await fetch("/route", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                map_id: currentMapId,
                 from_space_id: fromId,
                 to_space_id: toId
             })
@@ -795,6 +876,10 @@ async function requestRoute() {
 // ---------- Congestion request ----------
 
 async function requestCongestion() {
+    if (!currentMapId) {
+        setStatus("Select a map first.", true);
+        return;
+    }
     if (!congFromSelect || !congToSelect) {
         setStatus("Congestion controls not found.", true);
         return;
@@ -816,11 +901,15 @@ async function requestCongestion() {
         return;
     }
 
+    // Hide labels while congestion heatmap is shown
+    showLabels = false;
+
     try {
         const response = await fetch("/congestion", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
+                map_id: currentMapId,
                 from_period_index: fromIdx,
                 to_period_index: toIdx
             })
@@ -865,9 +954,14 @@ async function requestCongestion() {
     }
 }
 
-// ---------- Schedule upload ----------
+// ---------- Schedule upload (per map) ----------
 
 async function uploadSchedule() {
+    if (!currentMapId) {
+        setStatus("Select a map first.", true);
+        return;
+    }
+
     const fileInput = document.getElementById("scheduleFile");
 
     if (!fileInput.files || fileInput.files.length === 0) {
@@ -877,6 +971,7 @@ async function uploadSchedule() {
 
     const data = new FormData();
     data.append("schedule", fileInput.files[0]);
+    data.append("map_id", String(currentMapId));
 
     try {
         const response = await fetch("/upload_schedule", {
@@ -917,5 +1012,5 @@ async function uploadSchedule() {
 // ---------- Init on page load ----------
 
 window.addEventListener("load", async function () {
-    await loadFloorplanList();
+    await loadMapList();
 });

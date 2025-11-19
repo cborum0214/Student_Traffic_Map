@@ -10,18 +10,18 @@
 
 <div id="status">Ready.</div>
 
-<h3>Upload Floor Plan:</h3>
+<h3>Upload Floor Plan (creates a new map):</h3>
 <input id="floorplanFile" type="file" accept="image/*">
 <button id="uploadFloorplanBtn">Upload Floorplan</button>
 
-<h4>Or load existing floorplan:</h4>
+<h4>Or load an existing map:</h4>
 <div>
-    <select id="floorplanSelect"></select>
-    <button id="loadFloorplanBtn">Load Existing Floorplan</button>
+    <select id="mapSelect"></select>
+    <button id="loadMapBtn">Load Map</button>
 </div>
 
-<h3>Upload Student Schedule (CSV):</h3>
-<p><small>Expected columns: student_id, student_name, P1, P2, P3, ... (period cells must match Space names).</small></p>
+<h3>Upload Student Schedule (CSV) for Current Map:</h3>
+<p><small>Expected columns: student_id, student_name, P1, P2, P3, ... (period cells must match Space names on THIS map).</small></p>
 <input id="scheduleFile" type="file" accept=".csv">
 <button id="uploadScheduleBtn">Upload Schedule</button>
 
