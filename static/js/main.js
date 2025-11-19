@@ -7,6 +7,13 @@ const uploadScheduleBtn = document.getElementById("uploadScheduleBtn");
 uploadFloorplanBtn.addEventListener("click", uploadFloorplan);
 uploadScheduleBtn.addEventListener("click", uploadSchedule);
 
+// New: existing floorplan picklist
+const floorplanSelect = document.getElementById("floorplanSelect");
+const loadFloorplanBtn = document.getElementById("loadFloorplanBtn");
+if (loadFloorplanBtn) {
+    loadFloorplanBtn.addEventListener("click", loadExistingFloorplan);
+}
+
 // Mode: "space" or "hallway"
 let mode = "space";
 document.querySelectorAll('input[name="mode"]').forEach(function (radio) {
@@ -130,6 +137,89 @@ if (zoomOutBtn) {
 // Initialize zoom label
 updateZoomLabel();
 
+// ---------- Floorplan loading helpers ----------
+
+async function loadFloorplanList() {
+    if (!floorplanSelect) return;
+
+    try {
+        const response = await fetch("/floorplans");
+        const result = await response.json();
+        console.log("Floorplan list:", result);
+
+        if (!response.ok || result.status !== "ok") {
+            setStatus(result.message || "Error loading floorplan list.", true);
+            return;
+        }
+
+        const floorplans = result.floorplans || [];
+        floorplanSelect.innerHTML = "";
+
+        if (floorplans.length === 0) {
+            const opt = document.createElement("option");
+            opt.value = "";
+            opt.textContent = "No existing floorplans found";
+            floorplanSelect.appendChild(opt);
+            floorplanSelect.disabled = true;
+            if (loadFloorplanBtn) loadFloorplanBtn.disabled = true;
+            return;
+        }
+
+        floorplanSelect.disabled = false;
+        if (loadFloorplanBtn) loadFloorplanBtn.disabled = false;
+
+        floorplans.forEach(fp => {
+            const opt = document.createElement("option");
+            opt.value = fp.url;
+            opt.textContent = fp.filename;
+            floorplanSelect.appendChild(opt);
+        });
+
+    } catch (err) {
+        console.error("Error loading floorplan list:", err);
+        setStatus("Could not load existing floorplans.", true);
+    }
+}
+
+async function loadExistingFloorplan() {
+    if (!floorplanSelect) return;
+    const url = floorplanSelect.value;
+    if (!url) {
+        setStatus("Please select an existing floorplan.", true);
+        return;
+    }
+    await loadFloorplanImage(url);
+}
+
+async function loadFloorplanImage(imageUrl) {
+    setStatus("Loading floorplan from " + imageUrl + "...");
+
+    const img = new Image();
+    img.onload = async function () {
+        currentImage = img;
+
+        await loadSpacesFromServer();
+        await loadHallwaysFromServer();
+        await loadScheduleInfo(); // in case schedule already uploaded
+
+        routeHallwayIds = [];
+        hallwayCongestion = {};
+        zoom = 1.0;
+        if (zoomSlider) zoomSlider.value = "1";
+        updateZoomLabel();
+
+        drawFloorplan();
+        setStatus(
+            "Floorplan loaded. Click on the map to add spaces or hallways."
+        );
+    };
+    img.onerror = function (e) {
+        console.error("Error loading image", e);
+        setStatus("Failed to load floorplan image.", true);
+    };
+    img.src = imageUrl;
+}
+
 // ---------- Upload floorplan and draw it ----------
 
 async function uploadFloorplan() {
@@ -158,32 +248,11 @@ async function uploadFloorplan() {
         }
 
         const imageUrl = result.url;
-        setStatus("Floorplan uploaded. Loading image from " + imageUrl);
 
-        const img = new Image();
-        img.onload = async function () {
-            currentImage = img;
+        // Refresh floorplan list so the new upload appears in the picklist
+        await loadFloorplanList();
 
-            await loadSpacesFromServer();
-            await loadHallwaysFromServer();
-            await loadScheduleInfo(); // in case schedule already uploaded
-
-            routeHallwayIds = [];
-            hallwayCongestion = {};
-            zoom = 1.0;
-            if (zoomSlider) zoomSlider.value = "1";
-            updateZoomLabel();
-
-            drawFloorplan();
-            setStatus(
-                "Floorplan loaded. Click on the map to add spaces or hallways."
-            );
-        };
-        img.onerror = function (e) {
-            console.error("Error loading image", e);
-            setStatus("Failed to load floorplan image.", true);
-        };
-        img.src = imageUrl;
+        await loadFloorplanImage(imageUrl);
     } catch (err) {
         console.error(err);
         setStatus("Unexpected error uploading floorplan.", true);
@@ -292,7 +361,7 @@ function drawHallwaysOverlay() {
         const x1 = imageMeta.x + h.x1 * imageMeta.width;
         const y1 = imageMeta.y + h.y1 * imageMeta.height;
         const x2 = imageMeta.x + h.x2 * imageMeta.width;
-        const y2 = imageMeta.y + h.y2 * imageMeta.height;
+        const y2 = imageMeta.y + h.x2 * imageMeta.height;
 
         const count = hallwayCongestion[h.id] || 0;
 
@@ -531,7 +600,7 @@ async function deleteHallway(hallwayId) {
 
 canvas.addEventListener("click", async function (e) {
     if (!imageMeta.loaded) {
-        setStatus("Upload a floorplan first.", true);
+        setStatus("Upload or load a floorplan first.", true);
         return;
     }
 
@@ -673,7 +742,7 @@ async function requestRoute() {
     const fromVal = routeFromSelect.value;
     const toVal = routeToSelect.value;
 
-    if (!fromVal || !toVal) {
+       if (!fromVal || !toVal) {
         setStatus("Please select both a start and end space.", true);
         return;
     }
@@ -844,3 +913,9 @@ async function uploadSchedule() {
         setStatus("Unexpected error uploading schedule.", true);
     }
 }
+
+// ---------- Init on page load ----------
+
+window.addEventListener("load", async function () {
+    await loadFloorplanList();
+});

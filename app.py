@@ -2,6 +2,7 @@ import os
 import math
 import heapq
 import csv
+import json
 from flask import Flask, render_template, request, jsonify, url_for
 
 app = Flask(__name__)
@@ -10,6 +11,11 @@ app = Flask(__name__)
 UPLOAD_FOLDER = os.path.join("static", "floorplans")
 os.makedirs(UPLOAD_FOLDER, exist_ok=True)
 app.config["UPLOAD_FOLDER"] = UPLOAD_FOLDER
+
+# --------- Map persistence setup ---------
+DATA_DIR = "data"
+os.makedirs(DATA_DIR, exist_ok=True)
+DATA_FILE = os.path.join(DATA_DIR, "map.json")
 
 # --------- In-memory data ---------
 # Spaces: points (classrooms, stairwells, intersections, etc.)
@@ -30,6 +36,65 @@ PERIOD_NAMES = []
 # STUDENT_SCHEDULES: list of dicts
 #   { "student_id", "student_name", "space_ids": [space_id or None, ...] }
 STUDENT_SCHEDULES = []
+
+
+# --------- Persistence helpers ---------
+
+def save_map_data():
+    """
+    Save spaces, hallways, and ID counters to data/map.json.
+    """
+    data = {
+        "spaces": SPACES,
+        "hallways": HALLWAYS,
+        "next_space_id": NEXT_SPACE_ID,
+        "next_hallway_id": NEXT_HALLWAY_ID,
+    }
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        print(f"[MAP] Saved map data to {DATA_FILE}")
+    except Exception as e:
+        print("[MAP] Error saving map data:", e)
+
+
+def load_map_data():
+    """
+    Load spaces, hallways, and ID counters from data/map.json, if present.
+    """
+    global SPACES, HALLWAYS, NEXT_SPACE_ID, NEXT_HALLWAY_ID
+
+    if not os.path.exists(DATA_FILE):
+        print(f"[MAP] No existing {DATA_FILE}, starting with empty map.")
+        return
+
+    try:
+        with open(DATA_FILE, "r", encoding="utf-8") as f:
+            data = json.load(f)
+
+        SPACES[:] = data.get("spaces", [])
+        HALLWAYS[:] = data.get("hallways", [])
+
+        # If counters missing, infer from max id
+        NEXT_SPACE_ID = data.get(
+            "next_space_id",
+            (max((s["id"] for s in SPACES), default=0) + 1)
+        )
+        NEXT_HALLWAY_ID = data.get(
+            "next_hallway_id",
+            (max((h["id"] for h in HALLWAYS), default=0) + 1)
+        )
+
+        print(
+            f"[MAP] Loaded {len(SPACES)} spaces and {len(HALLWAYS)} hallways "
+            f"(next IDs: space={NEXT_SPACE_ID}, hallway={NEXT_HALLWAY_ID})"
+        )
+    except Exception as e:
+        print("[MAP] Error loading map data:", e)
+
+
+# Load map data once when the module is imported
+load_map_data()
 
 
 # --------- Helpers for spaces / hallways ---------
@@ -66,6 +131,7 @@ def find_or_create_space_at(x, y, threshold=0.03):
         }
         NEXT_SPACE_ID += 1
         SPACES.append(space)
+        save_map_data()
         print("Auto-created intersection space:", space)
         return space
 
@@ -89,6 +155,7 @@ def find_or_create_space_at(x, y, threshold=0.03):
         }
         NEXT_SPACE_ID += 1
         SPACES.append(space)
+        save_map_data()
         print("Auto-created intersection space:", space)
         return space
 
@@ -200,6 +267,28 @@ def upload_floorplan():
     return jsonify({"status": "ok", "url": image_url})
 
 
+@app.route("/floorplans", methods=["GET"])
+def list_floorplans():
+    """
+    List all floorplan images already uploaded in static/floorplans
+    so the frontend can show them in a picklist.
+    """
+    floorplans = []
+    for fname in os.listdir(app.config["UPLOAD_FOLDER"]):
+        lower = fname.lower()
+        if lower.endswith((".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp")):
+            url = url_for("static", filename=f"floorplans/{fname}")
+            floorplans.append({
+                "filename": fname,
+                "url": url,
+            })
+
+    return jsonify({
+        "status": "ok",
+        "floorplans": sorted(floorplans, key=lambda f: f["filename"])
+    })
+
+
 @app.route("/upload_schedule", methods=["POST"])
 def upload_schedule():
     """
@@ -216,8 +305,7 @@ def upload_schedule():
     if file.filename == "":
         return jsonify({"status": "error", "message": "No selected file"}), 400
 
-    os.makedirs("data", exist_ok=True)
-    filepath = os.path.join("data", file.filename)
+    filepath = os.path.join(DATA_DIR, file.filename)
     file.save(filepath)
 
     # Parse CSV
@@ -324,6 +412,7 @@ def add_space():
     }
     NEXT_SPACE_ID += 1
     SPACES.append(space)
+    save_map_data()
 
     print("New space:", space)
     return jsonify({"status": "ok", "space": space})
@@ -347,6 +436,8 @@ def delete_space(space_id):
         if h.get("from_space_id") != space_id and h.get("to_space_id") != space_id
     ]
     after_hallways = len(HALLWAYS)
+
+    save_map_data()
 
     print(
         f"Deleted space {space_id}. Spaces: {before_spaces}->{after_spaces}, "
@@ -402,6 +493,7 @@ def add_hallway():
     }
     NEXT_HALLWAY_ID += 1
     HALLWAYS.append(hallway)
+    save_map_data()
 
     print("New hallway:", hallway)
     return jsonify({"status": "ok", "hallway": hallway})
@@ -417,6 +509,8 @@ def delete_hallway(hallway_id):
     before = len(HALLWAYS)
     HALLWAYS = [h for h in HALLWAYS if h["id"] != hallway_id]
     after = len(HALLWAYS)
+
+    save_map_data()
 
     print(f"Deleted hallway {hallway_id}. Hallways: {before}->{after}")
 
