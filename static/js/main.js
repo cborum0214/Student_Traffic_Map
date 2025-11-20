@@ -409,44 +409,57 @@ function drawSpacesOverlay() {
 function drawHallwaysOverlay() {
     if (!imageMeta.loaded) return;
 
+    // Bucket hallways by tier so we can control draw order
+    const blueHallways = [];   // count === 0
+    const greenHallways = [];  // used, default/green tier
+    const orangeHallways = []; // orange tier
+    const redHallways = [];    // red tier
+
     hallways.forEach(function (h) {
-        const x1 = imageMeta.x + h.x1 * imageMeta.width;
-        const y1 = imageMeta.y + h.y1 * imageMeta.height;
-        const x2 = imageMeta.x + h.x2 * imageMeta.width;
-        const y2 = imageMeta.y + h.y2 * imageMeta.height;
-
         const count = hallwayCongestion[h.id] || 0;
+        const tier = hallwayColorTiers[h.id];
 
-        let color;
         if (count === 0) {
-            // No traffic: faint blue
-            color = "rgba(0, 0, 255, 0.2)";
+            // No traffic
+            blueHallways.push({ h, count });
+        } else if (tier === "red") {
+            redHallways.push({ h, count });
+        } else if (tier === "orange") {
+            orangeHallways.push({ h, count });
         } else {
-            // Use tier if we have one, otherwise default to green
-            const tier = hallwayColorTiers[h.id];
-            if (tier === "red") {
-                color = "rgba(255, 0, 0, 0.9)";
-            } else if (tier === "orange") {
-                color = "rgba(255, 165, 0, 0.8)";
-            } else {
-                // green by default for all other used hallways
-                color = "rgba(0, 200, 0, 0.7)";
-            }
+            // Any used hallway that isn't explicitly red/orange is green
+            greenHallways.push({ h, count });
         }
-
-        // Still scale line width by count so heavy paths look thicker
-        const baseWidth = 3;
-        const widthBoost = Math.min(count, 10) / 2;
-        ctx.strokeStyle = color;
-        ctx.lineWidth = baseWidth + widthBoost;
-
-        ctx.beginPath();
-        ctx.moveTo(x1, y1);
-        ctx.lineTo(x2, y2);
-        ctx.stroke();
     });
 
-    // Highlight manual route in bright green
+    function drawBucket(bucket, colorFunc) {
+        bucket.forEach(({ h, count }) => {
+            const x1 = imageMeta.x + h.x1 * imageMeta.width;
+            const y1 = imageMeta.y + h.y1 * imageMeta.height;
+            const x2 = imageMeta.x + h.x2 * imageMeta.width;
+            const y2 = imageMeta.y + h.y2 * imageMeta.height;
+
+            const color = colorFunc(count);
+            const baseWidth = 3;
+            const widthBoost = Math.min(count, 10) / 2;
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = baseWidth + widthBoost;
+
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+        });
+    }
+
+    // Draw in order: blue (no traffic) → green → orange → red
+    drawBucket(blueHallways, () => "rgba(0, 0, 255, 0.2)");
+    drawBucket(greenHallways, () => "rgba(0, 200, 0, 0.7)");
+    drawBucket(orangeHallways, () => "rgba(255, 165, 0, 0.8)");
+    drawBucket(redHallways, () => "rgba(255, 0, 0, 0.9)");
+
+    // Highlight manual route in bright green on top of everything
     if (routeHallwayIds && routeHallwayIds.length > 0) {
         hallways.forEach(function (h) {
             if (routeHallwayIds.indexOf(h.id) === -1) return;
