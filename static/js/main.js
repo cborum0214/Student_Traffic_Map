@@ -22,6 +22,7 @@ document.querySelectorAll('input[name="mode"]').forEach(function (radio) {
         pendingHallwayStart = null;
         routeHallwayIds = [];
         hallwayCongestion = {};
+        hallwayColorTiers = {};
 
         // When switching editing modes, show labels again
         showLabels = true;
@@ -38,7 +39,10 @@ let periodNames = [];
 let hallwayCongestion = {};   // hallway_id -> count
 let routeHallwayIds = [];
 
-// 👇 New: whether to draw room labels on the canvas
+// NEW: hallway_id -> 'red' | 'orange' | 'green'
+let hallwayColorTiers = {};
+
+// Whether to draw room labels on the canvas
 let showLabels = true;
 
 // DOM for lists
@@ -204,6 +208,10 @@ async function loadSelectedMap() {
     currentMapId = mapId;
     // When loading a map, default to labels visible
     showLabels = true;
+    hallwayCongestion = {};
+    hallwayColorTiers = {};
+    routeHallwayIds = [];
+    if (congestionSummaryEl) congestionSummaryEl.textContent = "";
     await loadFloorplanImage(mapObj.image_url);
 }
 
@@ -231,6 +239,7 @@ async function loadFloorplanImage(imageUrl) {
 
         routeHallwayIds = [];
         hallwayCongestion = {};
+        hallwayColorTiers = {};
         zoom = 1.0;
         if (zoomSlider) zoomSlider.value = "1";
         updateZoomLabel();
@@ -287,6 +296,10 @@ async function uploadFloorplan() {
         currentMapId = newMap.id;
         mapSelect.value = String(newMap.id);
         showLabels = true;
+        hallwayCongestion = {};
+        hallwayColorTiers = {};
+        routeHallwayIds = [];
+        if (congestionSummaryEl) congestionSummaryEl.textContent = "";
         await loadFloorplanImage(newMap.image_url);
     } catch (err) {
         console.error(err);
@@ -404,15 +417,24 @@ function drawHallwaysOverlay() {
 
         const count = hallwayCongestion[h.id] || 0;
 
-        let color = "rgba(0, 0, 255, 0.2)"; // low / none
-        if (count > 0 && count <= 5) {
-            color = "rgba(0, 200, 0, 0.7)"; // green
-        } else if (count > 5 && count <= 15) {
-            color = "rgba(255, 165, 0, 0.8)"; // orange
-        } else if (count > 15) {
-            color = "rgba(255, 0, 0, 0.9)"; // red
+        let color;
+        if (count === 0) {
+            // No traffic: faint blue
+            color = "rgba(0, 0, 255, 0.2)";
+        } else {
+            // Use tier if we have one, otherwise default to green
+            const tier = hallwayColorTiers[h.id];
+            if (tier === "red") {
+                color = "rgba(255, 0, 0, 0.9)";
+            } else if (tier === "orange") {
+                color = "rgba(255, 165, 0, 0.8)";
+            } else {
+                // green by default for all other used hallways
+                color = "rgba(0, 200, 0, 0.7)";
+            }
         }
 
+        // Still scale line width by count so heavy paths look thicker
         const baseWidth = 3;
         const widthBoost = Math.min(count, 10) / 2;
         ctx.strokeStyle = color;
@@ -552,8 +574,6 @@ function updatePeriodSelectors() {
         opt1.textContent = label;
         congFromSelect.appendChild(opt1);
 
-        
-
         const opt2 = document.createElement("option");
         opt2.value = String(idx);
         opt2.textContent = label;
@@ -607,7 +627,9 @@ async function deleteSpace(spaceId) {
         await loadHallwaysFromServer();
         routeHallwayIds = [];
         hallwayCongestion = {};
+        hallwayColorTiers = {};
         showLabels = true;
+        if (congestionSummaryEl) congestionSummaryEl.textContent = "";
         drawFloorplan();
         setStatus("Space " + spaceId + " deleted.");
     } catch (err) {
@@ -640,7 +662,9 @@ async function deleteHallway(hallwayId) {
         await loadHallwaysFromServer();
         routeHallwayIds = [];
         hallwayCongestion = {};
+        hallwayColorTiers = {};
         showLabels = true;
+        if (congestionSummaryEl) congestionSummaryEl.textContent = "";
         drawFloorplan();
         setStatus("Hallway " + hallwayId + " deleted.");
     } catch (err) {
@@ -689,6 +713,7 @@ canvas.addEventListener("click", async function (e) {
     // Clear route & congestion highlight when editing
     routeHallwayIds = [];
     hallwayCongestion = {};
+    hallwayColorTiers = {};
     if (congestionSummaryEl) congestionSummaryEl.textContent = "";
 
     if (mode === "space") {
@@ -921,6 +946,7 @@ async function requestCongestion() {
         if (!response.ok || result.status !== "ok") {
             setStatus(result.message || "Error computing congestion.", true);
             hallwayCongestion = {};
+            hallwayColorTiers = {};
             routeHallwayIds = [];
             drawFloorplan();
             if (congestionSummaryEl) congestionSummaryEl.textContent = "";
@@ -928,11 +954,34 @@ async function requestCongestion() {
         }
 
         hallwayCongestion = {};
+        hallwayColorTiers = {};
+
         const list = result.hallway_counts || [];
         list.forEach(function (hc) {
             hallwayCongestion[hc.hallway_id] = hc.count;
         });
-        routeHallwayIds = []; // clear manual route
+
+        // Build a sorted list of {id, count}, highest count first
+        const sorted = Object.entries(hallwayCongestion)
+            .map(([id, count]) => ({ id: parseInt(id, 10), count }))
+            .sort((a, b) => b.count - a.count);
+
+        // Top 2–3 red, next 8 orange, rest green
+        const redLimit = Math.min(3, sorted.length);
+        const orangeLimit = Math.min(redLimit + 8, sorted.length);
+
+        sorted.forEach((entry, index) => {
+            if (index < redLimit) {
+                hallwayColorTiers[entry.id] = "red";
+            } else if (index < orangeLimit) {
+                hallwayColorTiers[entry.id] = "orange";
+            } else {
+                hallwayColorTiers[entry.id] = "green";
+            }
+        });
+
+        // Clear manual route overlay
+        routeHallwayIds = [];
 
         drawFloorplan();
 

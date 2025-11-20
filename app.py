@@ -28,7 +28,7 @@ DATA_FILE = os.path.join(DATA_DIR, "maps.json")
 #     "next_space_id": int,
 #     "next_hallway_id": int,
 #     "period_names": [ ... ],
-#     "student_schedules": [ ... ]
+#     "student_schedules": [ ... ]   # <- now memory-only
 #   }
 MAPS = []
 NEXT_MAP_ID = 1
@@ -51,26 +51,37 @@ def ensure_map_defaults(m):
         "next_hallway_id",
         (max((h.get("id", 0) for h in m["hallways"]), default=0) + 1),
     )
+    # Schedule-related fields exist but will not be persisted across restarts
     m.setdefault("period_names", [])
     m.setdefault("student_schedules", [])
 
 
 def save_all_data():
-    """Save all maps to DATA_FILE."""
+    """Save maps to DATA_FILE (EXCLUDING schedules)."""
+    # IMPORTANT: we do NOT persist student_schedules or period_names
+    # so each run requires uploading a schedule again.
+    maps_to_save = []
+    for m in MAPS:
+        # Copy map but strip schedule-related fields
+        m_copy = dict(m)
+        m_copy["period_names"] = []
+        m_copy["student_schedules"] = []
+        maps_to_save.append(m_copy)
+
     data = {
         "next_map_id": NEXT_MAP_ID,
-        "maps": MAPS,
+        "maps": maps_to_save,
     }
     try:
         with open(DATA_FILE, "w", encoding="utf-8") as f:
             json.dump(data, f, indent=2)
-        print(f"[MAPS] Saved maps data to {DATA_FILE}")
+        print(f"[MAPS] Saved maps data to {DATA_FILE} (without schedules)")
     except Exception as e:
         print("[MAPS] Error saving maps data:", e)
 
 
 def load_all_data():
-    """Load all maps from DATA_FILE, if present."""
+    """Load maps from DATA_FILE, if present."""
     global MAPS, NEXT_MAP_ID
 
     if not os.path.exists(DATA_FILE):
@@ -91,6 +102,7 @@ def load_all_data():
             ensure_map_defaults(m)
 
         print(f"[MAPS] Loaded {len(MAPS)} map(s). NEXT_MAP_ID={NEXT_MAP_ID}")
+        print("[MAPS] Note: Schedules are not persisted; upload CSV each run.")
     except Exception as e:
         print("[MAPS] Error loading maps data:", e)
 
@@ -375,6 +387,8 @@ def upload_schedule():
     CSV columns:
       student_id, student_name, P1, P2, P3, ...
     Where P1..Pn are period names and their values are space names in that map.
+
+    NOTE: Schedule data is kept in memory only and NOT persisted to disk.
     """
     map_id = request.form.get("map_id", type=int)
     if not map_id:
@@ -450,13 +464,14 @@ def upload_schedule():
         print("[SCHEDULE] Error parsing schedule CSV:", e)
         return jsonify({"status": "error", "message": f"Failed to parse CSV: {e}"}), 400
 
+    # Overwrite any previous schedule in memory for this map
     map_obj["period_names"] = loaded_period_names
     map_obj["student_schedules"] = loaded_students
-    save_all_data()
 
     print(
         f"[SCHEDULE] Map {map_id}: loaded {len(loaded_students)} students with periods {loaded_period_names}"
     )
+    print("[SCHEDULE] Note: schedule is NOT saved to disk; reupload after restart.")
 
     return jsonify({
         "status": "ok",
@@ -670,9 +685,9 @@ def delete_hallway(hallway_id):
 
     return jsonify({
         "status": "ok",
-        "map_id": map_id,
-        "deleted_hallway_id": hallway_id,
-        "remaining_hallways": after
+            "map_id": map_id,
+            "deleted_hallway_id": hallway_id,
+            "remaining_hallways": after
     })
 
 
