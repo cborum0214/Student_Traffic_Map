@@ -33,6 +33,9 @@ DATA_FILE = os.path.join(DATA_DIR, "maps.json")
 MAPS = []
 NEXT_MAP_ID = 1
 
+# Name of the space on the map that represents ALL second-floor rooms
+SECOND_FLOOR_PROXY_SPACE_NAME = "1st Floor Stairs"
+
 
 # --------- Persistence helpers ---------
 
@@ -40,8 +43,14 @@ def ensure_map_defaults(m):
     """Make sure a map dict has all required keys."""
     m.setdefault("spaces", [])
     m.setdefault("hallways", [])
-    m.setdefault("next_space_id", (max((s.get("id", 0) for s in m["spaces"]), default=0) + 1))
-    m.setdefault("next_hallway_id", (max((h.get("id", 0) for h in m["hallways"]), default=0) + 1))
+    m.setdefault(
+        "next_space_id",
+        (max((s.get("id", 0) for s in m["spaces"]), default=0) + 1),
+    )
+    m.setdefault(
+        "next_hallway_id",
+        (max((h.get("id", 0) for h in m["hallways"]), default=0) + 1),
+    )
     m.setdefault("period_names", [])
     m.setdefault("student_schedules", [])
 
@@ -73,7 +82,10 @@ def load_all_data():
             data = json.load(f)
 
         MAPS = data.get("maps", [])
-        NEXT_MAP_ID = data.get("next_map_id", (max((m.get("id", 0) for m in MAPS), default=0) + 1))
+        NEXT_MAP_ID = data.get(
+            "next_map_id",
+            (max((m.get("id", 0) for m in MAPS), default=0) + 1),
+        )
 
         for m in MAPS:
             ensure_map_defaults(m)
@@ -105,7 +117,7 @@ def serialize_map_for_client(m):
 load_all_data()
 
 
-# --------- Helpers for spaces / hallways (per map) ---------
+# --------- Space / room helpers ---------
 
 def get_space_by_id(map_obj, space_id):
     for s in map_obj["spaces"]:
@@ -118,6 +130,49 @@ def get_space_by_name(map_obj, name):
     for s in map_obj["spaces"]:
         if s["name"] == name:
             return s
+    return None
+
+
+def map_virtual_room_to_real(map_obj, room_name):
+    """
+    Map virtual / upper-floor / undefined rooms to known spaces.
+
+    Your scheme:
+      - First floor: "Room XX" (double digits)
+      - Second floor: "Room 2XX", "Room 2103", etc.
+
+    We will:
+      - Extract the numeric part of the room name.
+      - If it's 3+ digits and starts with '2' (e.g., 201, 245, 2103),
+        treat it as a second-floor room and map it to '1st Floor Stairs'.
+    """
+    if not room_name:
+        return None
+
+    rn = room_name.strip()
+
+    # If the user writes "Room 201", strip off the "Room " part
+    num_part = rn
+    if rn.lower().startswith("room "):
+        num_part = rn[5:].strip()
+
+    # Keep only digits (handles "Room 201A" or similar)
+    digits = "".join(ch for ch in num_part if ch.isdigit())
+
+    # Second floor rule:
+    #  - At least 3 digits (so "25" or "09" won't match)
+    #  - First digit is '2'
+    if len(digits) >= 3 and digits[0] == "2":
+        # Map all such rooms to the stairs space
+        stairs_space = get_space_by_name(map_obj, SECOND_FLOOR_PROXY_SPACE_NAME)
+        if stairs_space:
+            print(
+                f"[ROOM MAP] Mapping '{room_name}' (digits={digits}) "
+                f"to stairs space '{SECOND_FLOOR_PROXY_SPACE_NAME}' (id={stairs_space['id']})"
+            )
+            return stairs_space
+
+    # No mapping rule matched
     return None
 
 
@@ -369,7 +424,16 @@ def upload_schedule():
                         space_ids.append(None)
                         continue
 
+                    # 1) Try exact match first (e.g., "Room 101")
                     space = get_space_by_name(map_obj, room_name)
+
+                    # 2) If not found, apply our "virtual room" mapping rule
+                    if not space:
+                        alias_space = map_virtual_room_to_real(map_obj, room_name)
+                        if alias_space:
+                            space = alias_space
+
+                    # 3) Record result
                     if space:
                         space_ids.append(space["id"])
                     else:

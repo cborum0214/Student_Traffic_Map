@@ -831,6 +831,13 @@
           "type": "Intersection",
           "x": 0.38,
           "y": 0.28305555555555556
+        },
+        {
+          "id": 124,
+          "name": "1st Floor Stairs",
+          "type": "Stairwell",
+          "x": 0.6487499999999999,
+          "y": 0.462125
         }
       ],
       "hallways": [
@@ -2243,10 +2250,20 @@
           "y2": 0.28480555555555553,
           "from_space_id": 122,
           "to_space_id": 36
+        },
+        {
+          "id": 155,
+          "name": "Hallway",
+          "x1": 0.6149999999999999,
+          "y1": 0.46258333333333335,
+          "x2": 0.6487499999999999,
+          "y2": 0.462125,
+          "from_space_id": 8,
+          "to_space_id": 124
         }
       ],
-      "next_space_id": 123,
-      "next_hallway_id": 155,
+      "next_space_id": 125,
+      "next_hallway_id": 156,
       "period_names": [
         "P1",
         "P2",
@@ -2278,9 +2295,9 @@
           "student_id": "41718",
           "student_name": "Creel, Salathiel",
           "space_ids": [
-            null,
+            124,
             88,
-            null,
+            124,
             93
           ]
         },
@@ -2290,7 +2307,7 @@
           "space_ids": [
             82,
             88,
-            null,
+            124,
             61
           ]
         },
@@ -2298,7 +2315,7 @@
           "student_id": "41740",
           "student_name": "Dove, Joshua",
           "space_ids": [
-            null,
+            124,
             88,
             62,
             78
@@ -2328,7 +2345,7 @@
           "student_id": "40916",
           "student_name": "Gray, Jake",
           "space_ids": [
-            null,
+            124,
             88,
             72,
             64
@@ -2338,7 +2355,7 @@
           "student_id": "41247",
           "student_name": "Greene, Nashawn",
           "space_ids": [
-            null,
+            124,
             88,
             72,
             60
@@ -2350,7 +2367,7 @@
           "space_ids": [
             84,
             88,
-            null,
+            124,
             66
           ]
         },
@@ -2368,7 +2385,7 @@
           "student_id": "39700",
           "student_name": "Houston, Aiden",
           "space_ids": [
-            null,
+            124,
             88,
             77,
             59
@@ -2378,10 +2395,10 @@
           "student_id": "36224",
           "student_name": "Jackson, Eric",
           "space_ids": [
-            null,
+            124,
             88,
             48,
-            null
+            124
           ]
         },
         {
@@ -2400,7 +2417,7 @@
           "space_ids": [
             98,
             88,
-            null,
+            124,
             80
           ]
         },
@@ -2450,7 +2467,7 @@
           "space_ids": [
             63,
             88,
-            null,
+            124,
             72
           ]
         },
@@ -2461,7 +2478,7 @@
             80,
             88,
             48,
-            null
+            124
           ]
         },
         {
@@ -2470,7 +2487,7 @@
           "space_ids": [
             75,
             88,
-            null,
+            124,
             90
           ]
         }
