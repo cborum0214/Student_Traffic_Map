@@ -3,9 +3,24 @@ import math
 import heapq
 import csv
 import json
-from flask import Flask, render_template, request, jsonify, url_for
+from functools import wraps
+from flask import Flask, render_template, request, jsonify, url_for, redirect, session
+
 
 app = Flask(__name__)
+
+# --- Security config ---
+app.secret_key = os.environ.get("HALLWAY_SECRET_KEY", "admin")
+ADMIN_PASSWORD = os.environ.get("HALLWAY_ADMIN_PASSWORD", "admin")
+
+def login_required(f):
+    @wraps(f)
+    def wrapper(*args, **kwargs):
+        if not session.get("admin_logged_in"):
+            # remember where they were trying to go
+            return redirect(url_for("login", next=request.path))
+        return f(*args, **kwargs)
+    return wrapper
 
 # --------- Floorplan upload setup ---------
 UPLOAD_FOLDER = os.path.join("static", "floorplans")
@@ -323,8 +338,39 @@ def dijkstra_shortest_path(map_obj, start_id, end_id):
 # --------- Flask routes: pages & maps ---------
 
 @app.route("/")
-def index():
-    return render_template("index.html")
+def landing_page():
+    return render_template("index.html")  # NEW landing page
+
+
+@app.route("/admin")
+@login_required
+def admin_page():
+    return render_template("admin.html")  # RENAMED admin view and security added
+
+
+@app.route("/user")
+def user_page():
+    return render_template("user.html")   # existing user view
+
+@app.route("/login", methods=["GET", "POST"])
+def login():
+    error = None
+    if request.method == "POST":
+        pwd = request.form.get("password", "")
+        if pwd == ADMIN_PASSWORD:
+            session["admin_logged_in"] = True
+            next_url = request.args.get("next") or url_for("admin_page")
+            return redirect(next_url)
+        else:
+            error = "Incorrect password. Please try again."
+
+    return render_template("login.html", error=error)
+
+
+@app.route("/logout")
+def logout():
+    session.clear()
+    return redirect(url_for("landing_page"))  # or whatever your "/" handler is called
 
 
 @app.route("/maps", methods=["GET"])

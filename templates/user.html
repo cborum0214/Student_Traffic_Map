@@ -1,0 +1,66 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Hallway Congestion Simulator - User View</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+
+<div style="position: absolute; top: 15px; right: 20px;">
+    <a href="/logout" 
+       style="
+           text-decoration:none; 
+           padding:8px 14px; 
+           background:#cc3300; 
+           color:white; 
+           border-radius:6px; 
+           font-size:15px;
+           font-weight:bold;
+       ">
+       Logout
+    </a>
+</div>
+
+
+<h1>Hallway Congestion Simulator – User View</h1>
+
+<div id="status">Ready.</div>
+
+<h3>Select Map</h3>
+<div>
+    <select id="mapSelect"></select>
+    <button id="loadMapBtn">Load Map</button>
+</div>
+
+<hr>
+
+<h3>Upload Student Schedule (CSV)</h3>
+<p><small>Expected columns: student_id, student_name, P1, P2, P3, ... (period cells must match Space names).</small></p>
+<input id="scheduleFile" type="file" accept=".csv">
+<button id="uploadScheduleBtn">Upload Schedule</button>
+
+<hr>
+
+<h3>Congestion View (by Periods)</h3>
+<div>
+    From Period:
+    <select id="congFrom"></select>
+    To Period:
+    <select id="congTo"></select>
+    <button id="showCongestionBtn">Show Congestion</button>
+    <span id="congestionSummary" style="margin-left: 10px;"></span>
+</div>
+
+<h3>View / Zoom</h3>
+<div>
+    <button id="zoomOutBtn">-</button>
+    <input id="zoomSlider" type="range" min="0.5" max="3" step="0.1" value="1">
+    <button id="zoomInBtn">+</button>
+    <span id="zoomLabel">100%</span>
+</div>
+
+<canvas id="floorCanvas" width="1000" height="700"></canvas>
+
+<script src="{{ url_for('static', filename='js/user_main.js') }}"></script>
+</body>
+</html>

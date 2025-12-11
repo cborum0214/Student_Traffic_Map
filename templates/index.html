@@ -2,83 +2,45 @@
 <html>
 <head>
     <title>Hallway Congestion Simulator</title>
-    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            text-align: center;
+            background: #f5f5f5;
+            padding-top: 80px;
+        }
+        h1 {
+            font-size: 32px;
+            margin-bottom: 40px;
+        }
+        .btn {
+            display: inline-block;
+            padding: 12px 25px;
+            margin: 20px;
+            font-size: 20px;
+            text-decoration: none;
+            color: white;
+            background: #0077cc;
+            border-radius: 8px;
+            transition: 0.2s;
+        }
+        .btn:hover {
+            background: #005fa3;
+        }
+        .admin {
+            background: #cc3300;
+        }
+        .admin:hover {
+            background: #992600;
+        }
+    </style>
 </head>
 <body>
 
 <h1>Hallway Congestion Simulator</h1>
 
-<div id="status">Ready.</div>
+<a href="/user" class="btn">User View</a>
+<a href="/admin" class="btn admin">Admin View</a>
 
-<h3>Upload Floor Plan (creates a new map):</h3>
-<input id="floorplanFile" type="file" accept="image/*">
-<button id="uploadFloorplanBtn">Upload Floorplan</button>
-
-<h4>Or load an existing map:</h4>
-<div>
-    <select id="mapSelect"></select>
-    <button id="loadMapBtn">Load Map</button>
-</div>
-
-<h3>Upload Student Schedule (CSV) for Current Map:</h3>
-<p><small>Expected columns: student_id, student_name, P1, P2, P3, ... (period cells must match Space names on THIS map).</small></p>
-<input id="scheduleFile" type="file" accept=".csv">
-<button id="uploadScheduleBtn">Upload Schedule</button>
-
-<hr>
-
-<h3>Editing Mode</h3>
-<label>
-    <input type="radio" name="mode" value="space" checked>
-    Mark Spaces/Classrooms
-</label>
-<label style="margin-left: 20px;">
-    <input type="radio" name="mode" value="hallway">
-    Draw Hallways / Walking Paths
-</label>
-
-<p>Click on the floorplan canvas to add items in the selected mode.</p>
-
-<h3>Test Route</h3>
-<div>
-    From:
-    <select id="routeFrom"></select>
-    To:
-    <select id="routeTo"></select>
-    <button id="showRouteBtn">Show Route</button>
-</div>
-
-<h3>Congestion View (by Periods)</h3>
-<div>
-    From Period:
-    <select id="congFrom"></select>
-    To Period:
-    <select id="congTo"></select>
-    <button id="showCongestionBtn">Show Congestion</button>
-    <span id="congestionSummary" style="margin-left: 10px;"></span>
-</div>
-
-<h3>View / Zoom</h3>
-<div>
-    <button id="zoomOutBtn">-</button>
-    <input id="zoomSlider" type="range" min="0.5" max="3" step="0.1" value="1">
-    <button id="zoomInBtn">+</button>
-    <span id="zoomLabel">100%</span>
-</div>
-
-<canvas id="floorCanvas" width="1000" height="700"></canvas>
-
-<div style="display: flex; gap: 40px; margin-top: 20px;">
-    <div>
-        <h3>Spaces (Classrooms / Intersections)</h3>
-        <ul id="spacesList"></ul>
-    </div>
-    <div>
-        <h3>Hallways</h3>
-        <ul id="hallwaysList"></ul>
-    </div>
-</div>
-
-<script src="{{ url_for('static', filename='js/main.js') }}"></script>
 </body>
 </html>

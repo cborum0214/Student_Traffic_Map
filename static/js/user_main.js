@@ -43,11 +43,11 @@ let isPanning = false;
 let lastPanClientX = 0;
 let lastPanClientY = 0;
 
-// Image meta for mapping drawing
+// Image meta for mapping drawing (in *screen* coords, after zoom & pan)
 let imageMeta = { x: 0, y: 0, width: 0, height: 0, loaded: false };
 let currentImage = null;
 
-// Manual route support not needed in user view, but we keep an array just in case
+// Manual route support not used in user view, but we keep an array just in case
 let routeHallwayIds = [];
 
 function setStatus(message, isError) {
@@ -59,16 +59,7 @@ function setStatus(message, isError) {
     statusDiv.style.color = isError ? "red" : "black";
 }
 
-// ---------- Zoom & pan helpers ----------
-
-function applyZoomTransform() {
-    const cx = canvas.width / 2;
-    const cy = canvas.height / 2;
-    // Translate to center + pan offset, then zoom, then back
-    ctx.translate(cx + panX, cy + panY);
-    ctx.scale(zoom, zoom);
-    ctx.translate(-cx, -cy);
-}
+// ---------- Zoom helpers (no canvas transforms, just math) ----------
 
 function updateZoomLabel() {
     if (!zoomLabel || !zoomSlider) return;
@@ -121,9 +112,10 @@ canvas.addEventListener("mousedown", function (e) {
     lastPanClientX = e.clientX;
     lastPanClientY = e.clientY;
     canvas.style.cursor = "grabbing";
+    e.preventDefault();
 });
 
-window.addEventListener("mousemove", function (e) {
+canvas.addEventListener("mousemove", function (e) {
     if (!isPanning) return;
 
     const dx = e.clientX - lastPanClientX;
@@ -136,6 +128,7 @@ window.addEventListener("mousemove", function (e) {
     panY += dy;
 
     drawFloorplan();
+    e.preventDefault();
 });
 
 window.addEventListener("mouseup", function () {
@@ -146,8 +139,7 @@ window.addEventListener("mouseup", function () {
 });
 
 canvas.addEventListener("mouseleave", function () {
-    // If mouse leaves canvas while pressed, we stop panning
-    if (isPanning && event.buttons === 0) {
+    if (isPanning) {
         isPanning = false;
         canvas.style.cursor = "default";
     }
@@ -308,7 +300,7 @@ async function loadScheduleInfo() {
     }
 }
 
-// ---------- Drawing ----------
+// ---------- Drawing (zoom + pan applied via math, not transforms) ----------
 
 function drawFloorplan() {
     if (!currentImage) return;
@@ -316,26 +308,25 @@ function drawFloorplan() {
     ctx.clearRect(0, 0, canvas.width, canvas.height);
 
     const img = currentImage;
-    const scale = Math.min(canvas.width / img.width, canvas.height / img.height);
-    const drawWidth = img.width * scale;
-    const drawHeight = img.height * scale;
-    const x = (canvas.width - drawWidth) / 2;
-    const y = (canvas.height - drawHeight) / 2;
+
+    // Base scale to fit canvas
+    const baseScale = Math.min(canvas.width / img.width, canvas.height / img.height);
+    const displayScale = baseScale * zoom;
+
+    const drawWidth = img.width * displayScale;
+    const drawHeight = img.height * displayScale;
+
+    // Centered, then offset by panX/panY
+    const x = (canvas.width - drawWidth) / 2 + panX;
+    const y = (canvas.height - drawHeight) / 2 + panY;
 
     imageMeta = { x: x, y: y, width: drawWidth, height: drawHeight, loaded: true };
 
-    ctx.save();
-    applyZoomTransform();
-
-    // Always draw only the base floorplan
+    // Draw floorplan
     ctx.drawImage(img, 0, 0, img.width, img.height, x, y, drawWidth, drawHeight);
 
-    // Draw congestion overlay (if any). This function now draws ONLY
-    // hallways that have traffic and ONLY after congestion is computed.
+    // Draw congestion overlay (if any)
     drawHallwaysOverlay();
-
-    // We do NOT draw spaces at all in user view
-    ctx.restore();
 }
 
 // In user view, we never show nodes / labels
