@@ -1,6 +1,7 @@
 const statusDiv = document.getElementById("status");
 const canvas = document.getElementById("floorCanvas");
 const ctx = canvas.getContext("2d");
+const tooltip = document.getElementById("tooltip");
 
 // Map selection
 const mapSelect = document.getElementById("mapSelect");
@@ -10,8 +11,9 @@ const loadMapBtn = document.getElementById("loadMapBtn");
 const uploadScheduleBtn = document.getElementById("uploadScheduleBtn");
 
 // Congestion controls
-const congFromSelect = document.getElementById("congFrom");
-const congToSelect = document.getElementById("congTo");
+const congWindowSelect = document.getElementById("congWindow");
+const classFilterSelect = document.getElementById("classFilter");
+const classDirectionSelect = document.getElementById("classDirection");
 const showCongestionBtn = document.getElementById("showCongestionBtn");
 const congestionSummaryEl = document.getElementById("congestionSummary");
 
@@ -32,22 +34,22 @@ let hallwayCongestion = {};   // hallway_id -> count
 // hallway_id -> 'red' | 'orange' | 'green'
 let hallwayColorTiers = {};
 
-// In user view, we do NOT show labels or nodes
+// We don't show labels or nodes in user view
 let showLabels = false;
 
 // Zoom & pan
 let zoom = 1.0;
-let panX = 0;   // in screen pixels
+let panX = 0;   // in pixels
 let panY = 0;
 let isPanning = false;
 let lastPanClientX = 0;
 let lastPanClientY = 0;
 
-// Image meta for mapping drawing (in *screen* coords, after zoom & pan)
+// Image meta (after zoom & pan applied in drawing)
 let imageMeta = { x: 0, y: 0, width: 0, height: 0, loaded: false };
 let currentImage = null;
 
-// Manual route support not used in user view, but we keep an array just in case
+// Route highlight (not really used on user view, but kept for consistency)
 let routeHallwayIds = [];
 
 function setStatus(message, isError) {
@@ -59,7 +61,7 @@ function setStatus(message, isError) {
     statusDiv.style.color = isError ? "red" : "black";
 }
 
-// ---------- Zoom helpers (no canvas transforms, just math) ----------
+// ---------- Zoom helpers (no canvas transform; we draw with math) ----------
 
 function updateZoomLabel() {
     if (!zoomLabel || !zoomSlider) return;
@@ -105,7 +107,32 @@ if (zoomOutBtn) {
 
 updateZoomLabel();
 
-// ---------- Panning with mouse drag ----------
+// ---------- Panning with mouse drag + tooltip hover ----------
+
+function distancePointToSegment(px, py, x1, y1, x2, y2) {
+    const dx = x2 - x1;
+    const dy = y2 - y1;
+    if (dx === 0 && dy === 0) {
+        const ddx = px - x1;
+        const ddy = py - y1;
+        return Math.sqrt(ddx * ddx + ddy * ddy);
+    }
+    const t = ((px - x1) * dx + (py - y1) * dy) / (dx * dx + dy * dy);
+    let projX, projY;
+    if (t < 0) {
+        projX = x1;
+        projY = y1;
+    } else if (t > 1) {
+        projX = x2;
+        projY = y2;
+    } else {
+        projX = x1 + t * dx;
+        projY = y1 + t * dy;
+    }
+    const ddx = px - projX;
+    const ddy = py - projY;
+    return Math.sqrt(ddx * ddx + ddy * ddy);
+}
 
 canvas.addEventListener("mousedown", function (e) {
     isPanning = true;
@@ -116,19 +143,68 @@ canvas.addEventListener("mousedown", function (e) {
 });
 
 canvas.addEventListener("mousemove", function (e) {
-    if (!isPanning) return;
+    const rect = canvas.getBoundingClientRect();
+    const mouseX = e.clientX - rect.left;
+    const mouseY = e.clientY - rect.top;
 
-    const dx = e.clientX - lastPanClientX;
-    const dy = e.clientY - lastPanClientY;
+    // --- PANNING (if mouse is down) ---
+    if (isPanning) {
+        const dx = e.clientX - lastPanClientX;
+        const dy = e.clientY - lastPanClientY;
 
-    lastPanClientX = e.clientX;
-    lastPanClientY = e.clientY;
+        lastPanClientX = e.clientX;
+        lastPanClientY = e.clientY;
 
-    panX += dx;
-    panY += dy;
+        panX += dx;
+        panY += dy;
 
-    drawFloorplan();
-    e.preventDefault();
+        drawFloorplan();
+        e.preventDefault();
+        if (tooltip) tooltip.style.display = "none";
+        return;
+    }
+
+    // --- HOVER TOOLTIP (only if we have congestion data) ---
+    if (!tooltip || !imageMeta.loaded ||
+        !hallwayCongestion || Object.keys(hallwayCongestion).length === 0) {
+        return;
+    }
+
+    let hovered = null;
+    let minDist = Infinity;
+    const threshold = 8; // pixels
+
+    hallways.forEach(h => {
+        const count = hallwayCongestion[h.id] || 0;
+        if (count <= 0) return;
+
+        const x1 = imageMeta.x + h.x1 * imageMeta.width;
+        const y1 = imageMeta.y + h.y1 * imageMeta.height;
+        const x2 = imageMeta.x + h.x2 * imageMeta.width;
+        const y2 = imageMeta.y + h.y2 * imageMeta.height;
+
+        const dist = distancePointToSegment(mouseX, mouseY, x1, y1, x2, y2);
+        if (dist < threshold && dist < minDist) {
+            minDist = dist;
+            hovered = { hallway: h, count };
+        }
+    });
+
+    if (hovered) {
+        const name = hovered.hallway.name || `Hallway #${hovered.hallway.id}`;
+
+        tooltip.style.display = "block";
+        tooltip.textContent = `${name}: ${hovered.count} students`;
+
+        const tooltipHeight = tooltip.offsetHeight;
+        const cursorX = e.clientX;
+        const cursorY = e.clientY;
+
+        tooltip.style.left = (cursorX + 12) + "px";
+        tooltip.style.top  = (cursorY - tooltipHeight / 2) + "px";
+    } else {
+        tooltip.style.display = "none";
+    }
 });
 
 window.addEventListener("mouseup", function () {
@@ -142,6 +218,9 @@ canvas.addEventListener("mouseleave", function () {
     if (isPanning) {
         isPanning = false;
         canvas.style.cursor = "default";
+    }
+    if (tooltip) {
+        tooltip.style.display = "none";
     }
 });
 
@@ -264,6 +343,7 @@ async function loadSpacesFromServer() {
         const result = await response.json();
         spaces = result.spaces || [];
         console.log("Loaded spaces:", spaces);
+        updateClassroomFilterOptions();
     } catch (err) {
         console.error("Error loading spaces:", err);
         setStatus("Could not load spaces.", true);
@@ -289,7 +369,6 @@ async function loadScheduleInfo() {
         const response = await fetch("/schedule_info?map_id=" + currentMapId);
         const result = await response.json();
         if (!response.ok || result.status !== "ok") {
-            // No schedule yet; that's okay
             return;
         }
         periodNames = result.period_names || [];
@@ -300,7 +379,7 @@ async function loadScheduleInfo() {
     }
 }
 
-// ---------- Drawing (zoom + pan applied via math, not transforms) ----------
+// ---------- Drawing (zoom + pan via math) ----------
 
 function drawFloorplan() {
     if (!currentImage) return;
@@ -309,49 +388,36 @@ function drawFloorplan() {
 
     const img = currentImage;
 
-    // Base scale to fit canvas
     const baseScale = Math.min(canvas.width / img.width, canvas.height / img.height);
     const displayScale = baseScale * zoom;
 
     const drawWidth = img.width * displayScale;
     const drawHeight = img.height * displayScale;
 
-    // Centered, then offset by panX/panY
     const x = (canvas.width - drawWidth) / 2 + panX;
     const y = (canvas.height - drawHeight) / 2 + panY;
 
     imageMeta = { x: x, y: y, width: drawWidth, height: drawHeight, loaded: true };
 
-    // Draw floorplan
     ctx.drawImage(img, 0, 0, img.width, img.height, x, y, drawWidth, drawHeight);
 
-    // Draw congestion overlay (if any)
     drawHallwaysOverlay();
-}
-
-// In user view, we never show nodes / labels
-function drawSpacesOverlay() {
-    // Intentionally empty
 }
 
 function drawHallwaysOverlay() {
     if (!imageMeta.loaded) return;
-
-    // If we haven't computed congestion yet, don't draw any hallways
     if (!hallwayCongestion || Object.keys(hallwayCongestion).length === 0) {
         return;
     }
 
-    // Bucket hallways by tier so we can control draw order,
-    // but ONLY include hallways that actually have traffic (count > 0).
-    const greenHallways = [];  // used, default/green tier
-    const orangeHallways = []; // orange tier
-    const redHallways = [];    // red tier
+    const greenHallways = [];
+    const orangeHallways = [];
+    const redHallways = [];
 
     hallways.forEach(function (h) {
         const count = hallwayCongestion[h.id] || 0;
         if (count <= 0) {
-            return; // skip zero traffic entirely; don't show the line
+            return;
         }
 
         const tier = hallwayColorTiers[h.id];
@@ -385,12 +451,10 @@ function drawHallwaysOverlay() {
         });
     }
 
-    // Draw in order: green → orange → red so red always on top
     drawBucket(greenHallways, () => "rgba(0, 200, 0, 0.7)");
     drawBucket(orangeHallways, () => "rgba(255, 165, 0, 0.8)");
     drawBucket(redHallways, () => "rgba(255, 0, 0, 0.9)");
 
-    // Route overlay not used in user view, but if ever set, draw on top
     if (routeHallwayIds && routeHallwayIds.length > 0) {
         hallways.forEach(function (h) {
             if (routeHallwayIds.indexOf(h.id) === -1) return;
@@ -410,47 +474,50 @@ function drawHallwaysOverlay() {
     }
 }
 
-// ---------- Period selectors ----------
+// ---------- Period & classroom filters ----------
 
 function updatePeriodSelectors() {
-    if (!congFromSelect || !congToSelect) return;
+    if (!congWindowSelect) return;
 
-    const prevFrom = congFromSelect.value;
-    const prevTo = congToSelect.value;
+    const prevWindow = congWindowSelect.value;
+    congWindowSelect.innerHTML = "";
 
-    congFromSelect.innerHTML = "";
-    congToSelect.innerHTML = "";
+    for (let i = 0; i < periodNames.length - 1; i++) {
+        const fromName = periodNames[i];
+        const toName = periodNames[i + 1];
 
-    periodNames.forEach(function (pname, idx) {
-        const label = (idx + 1) + ": " + pname;
-
-        const opt1 = document.createElement("option");
-        opt1.value = String(idx);
-        opt1.textContent = label;
-        congFromSelect.appendChild(opt1);
-
-        const opt2 = document.createElement("option");
-        opt2.value = String(idx);
-        opt2.textContent = label;
-        congToSelect.appendChild(opt2);
-    });
-
-    if (prevFrom) {
-        for (let i = 0; i < congFromSelect.options.length; i++) {
-            if (congFromSelect.options[i].value === prevFrom) {
-                congFromSelect.selectedIndex = i;
-                break;
-            }
-        }
+        const opt = document.createElement("option");
+        opt.value = `${i}-${i + 1}`;
+        opt.textContent = `${fromName} → ${toName}`;
+        congWindowSelect.appendChild(opt);
     }
-    if (prevTo) {
-        for (let i = 0; i < congToSelect.options.length; i++) {
-            if (congToSelect.options[i].value === prevTo) {
-                congToSelect.selectedIndex = i;
-                break;
-            }
-        }
+
+    if (prevWindow) {
+        congWindowSelect.value = prevWindow;
     }
+}
+
+function updateClassroomFilterOptions() {
+    if (!classFilterSelect) return;
+
+    const prev = classFilterSelect.value;
+    classFilterSelect.innerHTML = "";
+
+    const allOpt = document.createElement("option");
+    allOpt.value = "";
+    allOpt.textContent = "All classrooms";
+    classFilterSelect.appendChild(allOpt);
+
+    spaces
+        .filter(s => !s.type || s.type.toLowerCase().includes("class"))
+        .forEach(s => {
+            const opt = document.createElement("option");
+            opt.value = String(s.id);
+            opt.textContent = s.name;
+            classFilterSelect.appendChild(opt);
+        });
+
+    if (prev) classFilterSelect.value = prev;
 }
 
 // ---------- Schedule upload (per map) ----------
@@ -512,32 +579,44 @@ if (uploadScheduleBtn) {
     uploadScheduleBtn.addEventListener("click", uploadSchedule);
 }
 
-// ---------- Congestion request ----------
+// ---------- Congestion request (with filters) ----------
 
 async function requestCongestion() {
     if (!currentMapId) {
         setStatus("Select a map first.", true);
         return;
     }
-    if (!congFromSelect || !congToSelect) {
+    if (!congWindowSelect) {
         setStatus("Congestion controls not found.", true);
         return;
     }
 
-    const fromVal = congFromSelect.value;
-    const toVal = congToSelect.value;
-
-    if (!fromVal || !toVal) {
-        setStatus("Please select both from and to periods.", true);
+    const windowVal = congWindowSelect.value;
+    if (!windowVal) {
+        setStatus("Please select a period transition.", true);
         return;
     }
 
-    const fromIdx = parseInt(fromVal, 10);
-    const toIdx = parseInt(toVal, 10);
+    const [fromStr, toStr] = windowVal.split("-");
+    const fromIdx = parseInt(fromStr, 10);
+    const toIdx = parseInt(toStr, 10);
 
     if (isNaN(fromIdx) || isNaN(toIdx)) {
-        setStatus("Invalid period selection.", true);
+        setStatus("Invalid period transition.", true);
         return;
+    }
+
+    let filterSpaceId = null;
+    if (classFilterSelect && classFilterSelect.value) {
+        const parsedId = parseInt(classFilterSelect.value, 10);
+        if (!isNaN(parsedId)) {
+            filterSpaceId = parsedId;
+        }
+    }
+
+    let filterDirection = "any";
+    if (classDirectionSelect && classDirectionSelect.value) {
+        filterDirection = classDirectionSelect.value;
     }
 
     try {
@@ -547,7 +626,9 @@ async function requestCongestion() {
             body: JSON.stringify({
                 map_id: currentMapId,
                 from_period_index: fromIdx,
-                to_period_index: toIdx
+                to_period_index: toIdx,
+                filter_space_id: filterSpaceId,
+                filter_direction: filterDirection
             })
         });
 
@@ -571,12 +652,10 @@ async function requestCongestion() {
             hallwayCongestion[hc.hallway_id] = hc.count;
         });
 
-        // Build a sorted list of {id, count}, highest count first
         const sorted = Object.entries(hallwayCongestion)
             .map(([id, count]) => ({ id: parseInt(id, 10), count }))
             .sort((a, b) => b.count - a.count);
 
-        // Top 2–3 red, next 8 orange, rest green
         const redLimit = Math.min(3, sorted.length);
         const orangeLimit = Math.min(redLimit + 8, sorted.length);
 

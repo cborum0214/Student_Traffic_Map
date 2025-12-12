@@ -13,6 +13,7 @@ app = Flask(__name__)
 app.secret_key = os.environ.get("HALLWAY_SECRET_KEY", "admin")
 ADMIN_PASSWORD = os.environ.get("HALLWAY_ADMIN_PASSWORD", "admin")
 
+
 def login_required(f):
     @wraps(f)
     def wrapper(*args, **kwargs):
@@ -20,7 +21,9 @@ def login_required(f):
             # remember where they were trying to go
             return redirect(url_for("login", next=request.path))
         return f(*args, **kwargs)
+
     return wrapper
+
 
 # --------- Floorplan upload setup ---------
 UPLOAD_FOLDER = os.path.join("static", "floorplans")
@@ -43,7 +46,7 @@ DATA_FILE = os.path.join(DATA_DIR, "maps.json")
 #     "next_space_id": int,
 #     "next_hallway_id": int,
 #     "period_names": [ ... ],
-#     "student_schedules": [ ... ]   # <- now memory-only
+#     "student_schedules": [ ... ]   # <- memory-only
 #   }
 MAPS = []
 NEXT_MAP_ID = 1
@@ -53,7 +56,6 @@ SECOND_FLOOR_PROXY_SPACE_NAME = "1st Floor Stairs"
 
 
 # --------- Persistence helpers ---------
-
 def ensure_map_defaults(m):
     """Make sure a map dict has all required keys."""
     m.setdefault("spaces", [])
@@ -145,7 +147,6 @@ load_all_data()
 
 
 # --------- Space / room helpers ---------
-
 def get_space_by_id(map_obj, space_id):
     for s in map_obj["spaces"]:
         if s["id"] == space_id:
@@ -336,7 +337,6 @@ def dijkstra_shortest_path(map_obj, start_id, end_id):
 
 
 # --------- Flask routes: pages & maps ---------
-
 @app.route("/")
 def landing_page():
     return render_template("index.html")  # NEW landing page
@@ -351,6 +351,7 @@ def admin_page():
 @app.route("/user")
 def user_page():
     return render_template("user.html")   # existing user view
+
 
 @app.route("/login", methods=["GET", "POST"])
 def login():
@@ -731,9 +732,9 @@ def delete_hallway(hallway_id):
 
     return jsonify({
         "status": "ok",
-            "map_id": map_id,
-            "deleted_hallway_id": hallway_id,
-            "remaining_hallways": after
+        "map_id": map_id,
+        "deleted_hallway_id": hallway_id,
+        "remaining_hallways": after
     })
 
 
@@ -796,96 +797,145 @@ def route():
 
 # --------- Congestion simulation (per map) ---------
 
-def compute_congestion(map_obj, from_index, to_index):
+def compute_congestion(map_obj, from_index, to_index, filter_space_id=None, filter_direction="any"):
     """
-    For each student in a map, route from period[from_index] to period[to_index]
+    For each student in a map, look at transitions from period[from_index] -> period[from_index+1],
+    from_index+1 -> from_index+2, ..., up to to_index-1 -> to_index,
     and count how many times each hallway is used.
-    Returns a dict: hallway_id -> count
+
+    filter_space_id: optional space_id to filter on
+    filter_direction: "any", "arriving", or "leaving"
     """
     counts = {}
     period_names = map_obj.get("period_names", [])
     student_schedules = map_obj.get("student_schedules", [])
 
-    if from_index < 0 or to_index < 0:
-        return counts
-    if from_index >= len(period_names) or to_index >= len(period_names):
-        return counts
+    # Basic validation
+    if not period_names or not student_schedules:
+        return counts, 0
+
+    # We are going to iterate p in [from_index, to_index-1] and use p+1,
+    # so to_index must be at least from_index+1 and < len(period_names).
+    if from_index < 0 or to_index <= from_index:
+        return counts, 0
+    if to_index >= len(period_names):
+        return counts, 0
+
+    total_trips = 0
 
     for student in student_schedules:
         space_ids = student["space_ids"]
-        if from_index >= len(space_ids) or to_index >= len(space_ids):
+        if len(space_ids) <= to_index:
+            # Not enough periods for this student
             continue
 
-        s_from = space_ids[from_index]
-        s_to = space_ids[to_index]
+        # For each consecutive pair in the chosen window
+        for p in range(from_index, to_index):
+            s_from = space_ids[p]
+            s_to = space_ids[p + 1]
 
-        if s_from is None or s_to is None:
-            continue
-        if s_from == s_to:
-            continue
+            if s_from is None or s_to is None:
+                continue
+            if s_from == s_to:
+                continue
 
-        space_path, hallway_path = dijkstra_shortest_path(map_obj, s_from, s_to)
-        if space_path is None or not hallway_path:
-            continue
+            # Apply classroom + direction filter if requested
+            if filter_space_id is not None:
+                if filter_direction == "arriving":
+                    if s_to != filter_space_id:
+                        continue
+                elif filter_direction == "leaving":
+                    if s_from != filter_space_id:
+                        continue
+                else:  # "any"
+                    if s_from != filter_space_id and s_to != filter_space_id:
+                        continue
 
-        for h_id in hallway_path:
-            counts[h_id] = counts.get(h_id, 0) + 1
+            space_path, hallway_path = dijkstra_shortest_path(map_obj, s_from, s_to)
+            if space_path is None or not hallway_path:
+                continue
 
-    return counts
+            total_trips += 1
+            for h_id in hallway_path:
+                counts[h_id] = counts.get(h_id, 0) + 1
+
+    return counts, total_trips
 
 
 @app.route("/congestion", methods=["POST"])
 def congestion():
-    """
-    Compute congestion between two period indices in a specific map.
-    Expected JSON:
-      {
-        "map_id": 1,
-        "from_period_index": 0,
-        "to_period_index": 1
-      }
-    """
-    data = request.get_json()
-    if not data:
-        return jsonify({"status": "error", "message": "Missing JSON body"}), 400
+    data = request.get_json() or {}
 
     map_id = data.get("map_id")
-    if not map_id:
-        return jsonify({"status": "error", "message": "Missing map_id"}), 400
-
-    map_obj = get_map(int(map_id))
-    if not map_obj:
-        return jsonify({"status": "error", "message": "Map not found"}), 404
-
-    period_names = map_obj.get("period_names", [])
-    student_schedules = map_obj.get("student_schedules", [])
-
-    if not period_names or not student_schedules:
-        return jsonify({
-            "status": "error",
-            "message": "No schedule loaded for this map."
-        }), 400
+    if map_id is None:
+        return jsonify({"status": "error", "message": "map_id is required"}), 400
 
     try:
-        from_idx = int(data.get("from_period_index"))
-        to_idx = int(data.get("to_period_index"))
+        map_id = int(map_id)
     except (TypeError, ValueError):
-        return jsonify({"status": "error", "message": "Invalid period indices"}), 400
+        return jsonify({"status": "error", "message": "map_id must be an integer"}), 400
 
-    if from_idx < 0 or to_idx < 0 or from_idx >= len(period_names) or to_idx >= len(period_names):
-        return jsonify({"status": "error", "message": "Period index out of range"}), 400
+    map_obj = get_map(map_id)
+    if not map_obj:
+        return jsonify({"status": "error", "message": f"Map {map_id} not found"}), 404
 
-    counts = compute_congestion(map_obj, from_idx, to_idx)
-    hallway_counts = [{"hallway_id": h_id, "count": c} for h_id, c in counts.items()]
-    total_trips = sum(c for c in counts.values())
-    max_count = max(counts.values()) if counts else 0
+    # From/to period indices (we interpret as a window of consecutive transitions)
+    from_idx = data.get("from_period_index")
+    to_idx = data.get("to_period_index")
+
+    if from_idx is None or to_idx is None:
+        return jsonify({"status": "error", "message": "from_period_index and to_period_index are required"}), 400
+
+    try:
+        from_idx = int(from_idx)
+        to_idx = int(to_idx)
+    except (TypeError, ValueError):
+        return jsonify({"status": "error", "message": "from_period_index and to_period_index must be integers"}), 400
+
+    # Optional filters
+    raw_filter_space_id = data.get("filter_space_id")
+    filter_space_id = None
+    if raw_filter_space_id not in (None, ""):
+        try:
+            filter_space_id = int(raw_filter_space_id)
+        except (TypeError, ValueError):
+            return jsonify({"status": "error", "message": "filter_space_id must be an integer"}), 400
+
+    filter_direction = (data.get("filter_direction") or "any").lower()
+    if filter_direction not in ("any", "arriving", "leaving"):
+        filter_direction = "any"
+
+    period_names = map_obj.get("period_names", [])
+    if not period_names:
+        return jsonify({"status": "error", "message": "No schedule loaded for this map."}), 400
+
+    if from_idx < 0 or to_idx >= len(period_names) or to_idx <= from_idx:
+        return jsonify({"status": "error", "message": "Invalid period index range."}), 400
+
+    # Compute hallway usage
+    hallway_counts, total_trips = compute_congestion(
+        map_obj,
+        from_idx,
+        to_idx,
+        filter_space_id=filter_space_id,
+        filter_direction=filter_direction,
+    )
+
+    max_count = max(hallway_counts.values()) if hallway_counts else 0
+
+    hallway_counts_list = [
+        {"hallway_id": hid, "count": count}
+        for hid, count in hallway_counts.items()
+    ]
+
+    period_from_name = period_names[from_idx]
+    period_to_name = period_names[to_idx]
 
     return jsonify({
         "status": "ok",
-        "map_id": int(map_id),
-        "period_from": period_names[from_idx],
-        "period_to": period_names[to_idx],
-        "hallway_counts": hallway_counts,
+        "hallway_counts": hallway_counts_list,
+        "period_from": period_from_name,
+        "period_to": period_to_name,
         "total_trips": total_trips,
         "max_count": max_count
     })

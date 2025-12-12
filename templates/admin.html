@@ -64,13 +64,33 @@
     <button id="showRouteBtn">Show Route</button>
 </div>
 
-<h3>Congestion View (by Periods)</h3>
-<div>
-    From Period:
-    <select id="congFrom"></select>
-    To Period:
-    <select id="congTo"></select>
-    <button id="showCongestionBtn">Show Congestion</button>
+<h3>Congestion View</h3>
+<div style="display:flex; flex-wrap:wrap; gap:10px; align-items:center;">
+    <div>
+        Period Transition:
+        <select id="congWindow"></select>
+    </div>
+
+    <div>
+        Classroom:
+        <select id="classFilter">
+            <option value="">All classrooms</option>
+        </select>
+    </div>
+
+    <div>
+        Direction:
+        <select id="classDirection">
+            <option value="any">Any</option>
+            <option value="arriving">Arriving</option>
+            <option value="leaving">Leaving</option>
+        </select>
+    </div>
+
+    <div>
+        <button id="showCongestionBtn">Show Congestion</button>
+    </div>
+
     <span id="congestionSummary" style="margin-left: 10px;"></span>
 </div>
 
